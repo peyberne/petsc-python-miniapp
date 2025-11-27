@@ -7,7 +7,7 @@
 #SBATCH --time=1:00:00
 #SBATCH --output=benchmark_%j.log
 #SBATCH --error=benchmark_%j.err
-source ~/Codes/soledge3x/env_kuma_python-petsc.sh
+source env_kuma_python-petsc.sh
 
 # Input files (adapt according to your files)
 MATRIX_FILE="mat.dat"
