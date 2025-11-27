@@ -14,16 +14,13 @@ pip install numpy
 pip install 'Cython>=3.0.0,<3.1.0'
 
 # 2- install petsc
-git clone
+git clone v3.21.4
+./configure --with-clean --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpif90 --with-cudac=nvcc --with-cuda-arch=90  --with-debugging=0 --with-petsc4py=1 --prefix=/scratch/peyberne/petsc-install-python
 make
 export CFLAGS="-O3 -fPIC"
 export CPPFLAGS="-DMPICH_SKIP_MPICXX=1 -DOMPI_SKIP_MPICXX=1"
 make install
 python3 -c "import petsc4py; print(petsc4py.__version__)"
-
-./configure --with-clean --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpif90 --with-cudac=nvcc --with-cuda-arch=90  --with-debugging=0 --with-petsc4py=1 --prefix=/scratch/peyberne/petsc-install-python
-make
-make install
 
 # 3- copy matrix, RHS and initial guess
 cp ../petsc_miniapp/python_test_solver/mat mat.dat
