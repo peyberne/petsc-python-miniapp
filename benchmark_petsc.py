@@ -66,7 +66,7 @@ def solve_with_options(mat, rhs, initial_guess, ksp_type, pc_type, rtol=1e-13, u
         converged = ksp.getConvergedReason() > 0
         iterations = ksp.getIterationNumber()
         residual = ksp.getResidualNorm()
-        solution_norm = x.norm(PETSc.NormType.NORM_INFINITY)
+        solution_norm = x.norm(PETSc.NormType.NORM_1)
         
     except Exception as e:
         PETSc.Sys.Print(f"Error during solve: {e}")
