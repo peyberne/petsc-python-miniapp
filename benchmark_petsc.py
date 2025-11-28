@@ -111,6 +111,9 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, use_gpu=False):
     PETSc.Sys.Print("Loading data...")
     mat, rhs, guess = load_petsc_data(mat_file, rhs_file, guess_file, use_gpu=use_gpu)
     
+    size = PETSc.COMM_WORLD.getSize()
+    rank = PETSc.COMM_WORLD.getRank()
+    PETSc.Sys.Print(f"Running with {size} MPI process(es).")
     PETSc.Sys.Print(f"Matrix size: {mat.getSize()}")
     PETSc.Sys.Print(f"RHS size: {rhs.getSize()}")
     
