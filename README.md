@@ -73,7 +73,7 @@ python3 -c "import petsc4py; print(petsc4py.__version__)"
 ```
 cp ../petsc_miniapp/python_test_solver/mat mat.dat
 cp ../petsc_miniapp/python_test_solver/rhs rhs.dat
-cp ../petsc_miniapp/python_test_solver/sol sol.dat   # initial guess
+cp ../petsc_miniapp/python_test_solver/guess guess.dat   # initial guess
 ```
 
 ---
@@ -91,7 +91,7 @@ The submission script forwards the `--gpu` flag to the Python benchmark:
 - **Use GPU (CUDA-enabled PETSc)**  
   The default submission script already enables GPU:
   ```
-  srun python3 benchmark_petsc.py mat.dat rhs.dat sol.dat --gpu
+  srun python3 benchmark_petsc.py mat.dat rhs.dat guess.dat --gpu
   ```
   This activates:
   - `mat_type=aijcusparse`
@@ -100,14 +100,14 @@ The submission script forwards the `--gpu` flag to the Python benchmark:
 - **Run on CPU only**
   Remove the `--gpu` flag:
   ```
-  srun python3 benchmark_petsc.py mat.dat rhs.dat sol.dat
+  srun python3 benchmark_petsc.py mat.dat rhs.dat guess.dat
   ```
 
 ### Running with or without an initial guess
 
 - **With initial guess**:
   ```
-  python3 benchmark_petsc.py mat.dat rhs.dat sol.dat --gpu
+  python3 benchmark_petsc.py mat.dat rhs.dat guess.dat --gpu
   ```
 
 - **Without initial guess**:
