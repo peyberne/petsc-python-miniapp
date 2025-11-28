@@ -47,8 +47,7 @@ Build and install:
 
 ```
 make
-export CFLAGS="-O3 -fPIC"
-export CPPFLAGS="-DMPICH_SKIP_MPICXX=1 -DOMPI_SKIP_MPICXX=1"
+export CFLAGS=$(echo $CFLAGS | sed 's/-fwrapv//g')
 make install
 ```
 
