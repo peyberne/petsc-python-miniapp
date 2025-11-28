@@ -9,22 +9,39 @@ from petsc4py import PETSc
 import numpy as np
 import matplotlib.pyplot as plt
 
-def load_petsc_data(mat_file, rhs_file, guess_file=None):
+def load_petsc_data(mat_file, rhs_file, guess_file=None, use_gpu=False):
     """Load matrix, RHS and initial guess from PETSc files"""
+
+    # Load matrix
     viewer_mat = PETSc.Viewer().createBinary(mat_file, 'r')
     mat = PETSc.Mat().load(viewer_mat)
     viewer_mat.destroy()
-    
+
+    # Load RHS
     viewer_rhs = PETSc.Viewer().createBinary(rhs_file, 'r')
     rhs = PETSc.Vec().load(viewer_rhs)
     viewer_rhs.destroy()
-    
+
+    # Load optional initial guess
     guess = None
     if guess_file:
         viewer_guess = PETSc.Viewer().createBinary(guess_file, 'r')
         guess = PETSc.Vec().load(viewer_guess)
         viewer_guess.destroy()
-    
+
+    # If GPU requested, tell PETSc to use GPU types
+    if use_gpu:
+        PETSc.Sys.Print("Enabling GPU types via PETSc options...")
+        opts = PETSc.Options()
+        opts.setValue("mat_type", "aijcusparse")
+        opts.setValue("vec_type", "cuda")
+
+        # Apply options to existing objects
+        mat.setFromOptions()
+        rhs.setFromOptions()
+        if guess:
+            guess.setFromOptions()
+
     return mat, rhs, guess
 
 def solve_with_options(mat, rhs, initial_guess, ksp_type, pc_type, rtol=1e-13, use_initial_guess=True):
@@ -87,12 +104,12 @@ def solve_with_options(mat, rhs, initial_guess, ksp_type, pc_type, rtol=1e-13, u
         'solution_norm': solution_norm
     }
 
-def run_benchmarks(mat_file, rhs_file, guess_file=None):
+def run_benchmarks(mat_file, rhs_file, guess_file=None, use_gpu=False):
     """Run all benchmarks"""
     
     # Load data
     PETSc.Sys.Print("Loading data...")
-    mat, rhs, guess = load_petsc_data(mat_file, rhs_file, guess_file)
+    mat, rhs, guess = load_petsc_data(mat_file, rhs_file, guess_file, use_gpu=use_gpu)
     
     PETSc.Sys.Print(f"Matrix size: {mat.getSize()}")
     PETSc.Sys.Print(f"RHS size: {rhs.getSize()}")
@@ -221,18 +238,27 @@ def plot_results(results, output_file='benchmark_results.png'):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python benchmark_petsc.py <matrix.dat> <rhs.dat> [guess.dat]")
+        print("Usage: python benchmark_petsc.py <matrix.dat> <rhs.dat> [guess.dat] [--gpu]")
         sys.exit(1)
-    
+
+    # Positional arguments
     mat_file = sys.argv[1]
     rhs_file = sys.argv[2]
-    guess_file = sys.argv[3] if len(sys.argv) > 3 else None
-    
+
+    # Optional guess file
+    guess_file = None
+    for arg in sys.argv[3:]:
+        if arg.endswith(".dat"):
+            guess_file = arg
+
+    # GPU flag
+    use_gpu = "--gpu" in sys.argv
+
     # Execute benchmarks
-    results = run_benchmarks(mat_file, rhs_file, guess_file)
-    
-    # Create plot (only on process 0)
+    results = run_benchmarks(mat_file, rhs_file, guess_file, use_gpu)
+
+    # Create plot (only on rank 0)
     if PETSc.COMM_WORLD.getRank() == 0:
         plot_results(results)
-    
+
     PETSc.Sys.Print("\nBenchmark completed!")

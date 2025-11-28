@@ -33,7 +33,7 @@ if [ ! -f "$RHS_FILE" ]; then
 fi
 
 # Run benchmark
-srun -n $SLURM_NTASKS python3 benchmark_petsc.py $MATRIX_FILE $RHS_FILE $GUESS_FILE
+srun -n $SLURM_NTASKS python3 benchmark_petsc.py $MATRIX_FILE $RHS_FILE $GUESS_FILE --gpu
 
 echo "=========================================="
 echo "Benchmark completed"
