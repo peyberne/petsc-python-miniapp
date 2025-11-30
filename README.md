@@ -1,3 +1,4 @@
+# petsc-python-miniapp
 
 A small Python mini-application for testing PETSc solvers, built with CUDA, MPI, and petsc4py support.  
 This README provides all the steps needed to set up the environment, install PETSc, prepare input data, and run the benchmark on the target HPC system.
@@ -73,11 +74,26 @@ All PETSc binary input files should be placed in the `data/` directory:
 
 ```
 data/
- ├── mat.dat      # PETSc matrix
- ├── rhs.dat      # RHS vector
- ├── guess.dat    # optional initial guess
- └── sol.dat      # reference solution (from Fortran code)
+ ├── mat.dat        # PETSc matrix
+ ├── rhs.dat        # RHS vector
+ ├── guess.dat      # optional initial guess
+ ├── sol.dat        # reference solution (from Fortran code)
+ └── options.json   # JSON file describing solver configurations
 ```
+
+Example `options.json`:
+
+```json
+{
+  "ksp_rtol": [1e-13],
+  "pc_type": ["gamg", "pbjacobi"],
+  "ksp_type": ["gmres", "bcgs"],
+  "use_initial_guess": [true]
+}
+```
+
+The code generates all combinations of these lists (Cartesian product).  
+If `--config` is not provided, a built-in default set of options is used.
 
 ---
 
@@ -89,7 +105,7 @@ Submit the job with:
 sbatch submission_script.sh
 ```
 
-The script internally runs:
+The script internally runs something like:
 
 ```bash
 srun python3 benchmark_petsc.py \
@@ -97,6 +113,7 @@ srun python3 benchmark_petsc.py \
     --rhs data/rhs.dat \
     --guess data/guess.dat \
     --ref data/sol.dat \
+    --config data/options.json \
     --gpu
 ```
 
@@ -122,6 +139,17 @@ python3 benchmark_petsc.py --mat data/mat.dat --rhs data/rhs.dat --guess data/gu
 python3 benchmark_petsc.py --mat data/mat.dat --rhs data/rhs.dat --ref data/sol.dat
 ```
 
+### With JSON config file
+
+```bash
+python3 benchmark_petsc.py \
+    --mat data/mat.dat \
+    --rhs data/rhs.dat \
+    --guess data/guess.dat \
+    --ref data/sol.dat \
+    --config data/options.json
+```
+
 ### GPU mode (CUDA Vec + AIJcuSPARSE Mat)
 
 ```bash
@@ -130,13 +158,9 @@ python3 benchmark_petsc.py \
     --rhs data/rhs.dat \
     --guess data/guess.dat \
     --ref data/sol.dat \
+    --config data/options.json \
     --gpu
 ```
-
-GPU mode internally sets:
-
-- `mat_type = aijcusparse`
-- `vec_type = cuda`
 
 ---
 
@@ -159,8 +183,6 @@ The plot includes:
 ---
 
 ## Illustration
-
-Below is an example of the plot produced by the miniapp:
 
 ![Example PETSc benchmark results](results/benchmark_results.png)
 

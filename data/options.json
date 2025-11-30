@@ -1,0 +1,6 @@
+{
+  "ksp_rtol": [1e-13],
+  "pc_type": ["gamg", "pbjacobi"],
+  "ksp_type": ["gmres", "bcgs"],
+  "use_initial_guess": [true]
+}
