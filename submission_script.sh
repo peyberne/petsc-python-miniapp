@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --gpus-per-task=1
 #SBATCH --partition h100
 #SBATCH --time=1:00:00
 #SBATCH --output=benchmark_%j.log
