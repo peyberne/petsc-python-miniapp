@@ -217,7 +217,7 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=F
     return results
 
 
-def plot_results(results, output_file='benchmark_results.png'):
+def plot_results(results, output_file='results/benchmark_results.png'):
     """Create a plot of the results."""
 
     # Filter converged results
@@ -287,6 +287,7 @@ def plot_results(results, output_file='benchmark_results.png'):
 
 
 if __name__ == "__main__":
+
     # Default values
     mat_file = None
     rhs_file = None

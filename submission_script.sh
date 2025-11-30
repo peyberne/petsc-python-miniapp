@@ -10,10 +10,10 @@
 source env_kuma_python-petsc.sh
 
 # Input files (adapt according to your files)
-MATRIX_FILE="mat.dat"
-RHS_FILE="rhs.dat"
-GUESS_FILE="guess.dat"  # Optional - initial guess for solver
-REF_FILE="sol.dat"      # reference solution 
+MATRIX_FILE="data/mat.dat"
+RHS_FILE="data/rhs.dat"
+GUESS_FILE="data/guess.dat"  # Optional - initial guess for solver
+REF_FILE="data/sol.dat"      # reference solution 
 
 echo "=========================================="
 echo "Starting PETSc benchmark"
@@ -32,7 +32,6 @@ if [ ! -f "$RHS_FILE" ]; then
     echo "Error: RHS file $RHS_FILE not found!"
     exit 1
 fi
-
 # Run benchmark
 srun -n $SLURM_NTASKS python3 benchmark_petsc.py \
     --mat $MATRIX_FILE \
