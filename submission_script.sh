@@ -13,6 +13,7 @@ source env_kuma_python-petsc.sh
 MATRIX_FILE="mat.dat"
 RHS_FILE="rhs.dat"
 GUESS_FILE="guess.dat"  # Optional - initial guess for solver
+REF_FILE="sol.dat"      # reference solution 
 
 echo "=========================================="
 echo "Starting PETSc benchmark"
@@ -33,7 +34,12 @@ if [ ! -f "$RHS_FILE" ]; then
 fi
 
 # Run benchmark
-srun -n $SLURM_NTASKS python3 benchmark_petsc.py $MATRIX_FILE $RHS_FILE $GUESS_FILE --gpu
+srun -n $SLURM_NTASKS python3 benchmark_petsc.py \
+    --mat $MATRIX_FILE \
+    --rhs $RHS_FILE \
+    --guess $GUESS_FILE \
+    --ref $REF_FILE \
+    --gpu
 
 echo "=========================================="
 echo "Benchmark completed"
