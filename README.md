@@ -6,6 +6,7 @@ This README provides all the steps needed to set up the environment, install PET
 
 ## 1. Load required modules
 
+With nvhpc compiler
 ```bash
 module load nvhpc
 module load cuda
@@ -171,4 +172,3 @@ Below is an example of the plot produced by the miniapp:
 - Ensure that the PETSc installation prefix (`petsc-install-python`) matches the configure step.
 - `petsc4py` must be installed **via PETSc’s configure**, not via `pip install petsc4py`.
 - This miniapp works both on CPU and GPU.
-- Requires SLURM + NVHPC environment.
