@@ -9,7 +9,37 @@ import itertools
 from petsc4py import PETSc
 import numpy as np
 import matplotlib.pyplot as plt
+import json
 
+def load_options_from_json(path):
+    """Load solver options from a JSON file and return a list of configuration dicts.
+
+    Expected JSON format, e.g.:
+
+    {
+      "ksp_rtol": [1e-13],
+      "pc_type": ["gamg", "pbjacobi"],
+      "ksp_type": ["gmres", "bcgs"],
+      "use_initial_guess": [true]
+    }
+    """
+    with open(path, "r") as f:
+        opts = json.load(f)
+
+    required_keys = ["ksp_rtol", "pc_type", "ksp_type", "use_initial_guess"]
+    for k in required_keys:
+        if k not in opts:
+            raise ValueError(f"Missing required key '{k}' in config file: {path}")
+
+    keys = list(opts.keys())
+    lists = [opts[k] for k in keys]
+
+    config_list = []
+    for combo in itertools.product(*lists):
+        entry = {key: value for key, value in zip(keys, combo)}
+        config_list.append(entry)
+
+    return config_list
 
 def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=False):
     """Load matrix, RHS, initial guess, and optional reference solution from PETSc binary files."""
@@ -127,7 +157,8 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
     }
 
 
-def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=False):
+def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
+                   use_gpu=False, config_file=None):
     """Run all benchmarks."""
 
     # Load data
@@ -158,27 +189,38 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=F
 
     PETSc.Sys.Print("")
 
-    # Options to test
-    options = {
-        "ksp_rtol": [1e-13],
-        "pc_type": ["gamg", "pbjacobi"],
-        "ksp_type": ["gmres", "bcgs", "fgmres", "lgmres", "dgmres"],
-        "use_initial_guess": [True],
-    }
-
-    # Generate all combinations
-    keys = list(options.keys())
-    combinations = list(itertools.product(*[options[k] for k in keys]))
+    # Load solver configurations
+    if config_file is not None:
+        PETSc.Sys.Print(f"Loading solver options from JSON: {config_file}")
+        combinations = load_options_from_json(config_file)
+        use_config_file = True
+    else:
+        PETSc.Sys.Print("Using built-in default solver options")
+        options = {
+            "ksp_rtol": [1e-13],
+            "pc_type": ["gamg", "pbjacobi"],
+            "ksp_type": ["gmres", "bcgs", "fgmres", "lgmres", "dgmres"],
+            "use_initial_guess": [True],
+        }
+        keys = list(options.keys())
+        combinations = list(itertools.product(*[options[k] for k in keys]))
+        use_config_file = False
 
     results = []
 
-    PETSc.Sys.Print(f"\nTesting {len(combinations)} combinations...\n")
+    PETSc.Sys.Print(f"\nTesting {len(combinations)} configurations...\n")
 
     for i, combo in enumerate(combinations):
-        rtol = combo[0]
-        pc_type = combo[1]
-        ksp_type = combo[2]
-        use_guess = combo[3]
+        if use_config_file:
+            rtol = combo["ksp_rtol"]
+            pc_type = combo["pc_type"]
+            ksp_type = combo["ksp_type"]
+            use_guess = combo["use_initial_guess"]
+        else:
+            rtol = combo[0]
+            pc_type = combo[1]
+            ksp_type = combo[2]
+            use_guess = combo[3]
 
         label = f"{ksp_type}+{pc_type}"
         PETSc.Sys.Print(f"[{i+1}/{len(combinations)}] Test: {label}")
@@ -215,7 +257,6 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=F
         ref_sol.destroy()
 
     return results
-
 
 def plot_results(results, output_file='results/benchmark_results.png'):
     """Create a plot of the results."""
@@ -294,6 +335,7 @@ if __name__ == "__main__":
     guess_file = None
     ref_file = None
     use_gpu = False
+    config_file = None
 
     # Parse arguments manually
     i = 1
@@ -316,6 +358,10 @@ if __name__ == "__main__":
             ref_file = sys.argv[i + 1]
             i += 1
 
+        elif arg == "--config" and i + 1 < len(sys.argv):
+            config_file = sys.argv[i + 1]
+            i += 1
+            
         elif arg == "--gpu":
             use_gpu = True
 
@@ -327,11 +373,15 @@ if __name__ == "__main__":
     # Sanity checks
     if mat_file is None or rhs_file is None:
         print("Usage: python benchmark_petsc.py --mat mat.dat --rhs rhs.dat "
-              "[--guess guess.dat] [--ref sol.dat] [--gpu]")
+              "[--guess guess.dat] [--ref sol.dat] [--config options.json] [--gpu]")
         sys.exit(1)
 
     # Run benchmark
-    results = run_benchmarks(mat_file, rhs_file, guess_file, ref_file, use_gpu)
+    results = run_benchmarks(
+        mat_file, rhs_file, guess_file, ref_file,
+        use_gpu=use_gpu,
+        config_file=config_file
+    )
 
     # Plot (rank 0 only)
     if PETSc.COMM_WORLD.getRank() == 0:

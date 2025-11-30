@@ -14,6 +14,7 @@ MATRIX_FILE="data/mat.dat"
 RHS_FILE="data/rhs.dat"
 GUESS_FILE="data/guess.dat"  # Optional - initial guess for solver
 REF_FILE="data/sol.dat"      # reference solution 
+CONFIG_FILE="data/options.json"
 
 echo "=========================================="
 echo "Starting PETSc benchmark"
@@ -38,6 +39,7 @@ srun -n $SLURM_NTASKS python3 benchmark_petsc.py \
     --rhs $RHS_FILE \
     --guess $GUESS_FILE \
     --ref $REF_FILE \
+    --config $CONFIG_FILE \
     --gpu
 
 echo "=========================================="
