@@ -10,6 +10,10 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
 
+    # Run inside your PETSc + petsc4py Docker image
+    container:
+      image: ghcr.io/peyberne/petsc-python-miniapp:cpu
+
     env:
       MPLBACKEND: Agg   # avoid GUI backend issues for matplotlib
 
@@ -17,33 +21,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install system dependencies (PETSc + petsc4py, MPI)
+      - name: Show Python and PETSc versions
         run: |
-          sudo apt-get update
-          sudo apt-get install -y             python3-pip             python3-petsc4py             petsc-dev             libopenmpi-dev             openmpi-bin
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install numpy matplotlib
-
-      - name: Check that benchmark_petsc.py imports
-        run: |
-          python - << 'EOF'
-          import benchmark_petsc
+          python3 -c "import sys; print('Python:', sys.version)"
+          python3 - << 'EOF'
           from petsc4py import PETSc
-          PETSc.Sys.Print("benchmark_petsc.py imported successfully in CI.")
           PETSc.Sys.Print("PETSc version: %s" % (PETSc.GetVersion(),))
           EOF
 
-      - name: Run a tiny smoke test (small in-memory system)
+      - name: Run tiny smoke test (small in-memory system)
         run: |
-          python - << 'EOF'
+          python3 - << 'EOF'
           from petsc4py import PETSc
           import benchmark_petsc
 
@@ -85,3 +73,13 @@ jobs:
 
           PETSc.Sys.Print("Smoke test finished, got %d result(s)." % (len(results),))
           EOF
+
+      # Optional: run the full benchmark on your data
+      - name: Run full benchmark on sample data
+        run: |
+          python3 benchmark_petsc.py \
+            --mat data/mat.dat \
+            --rhs data/rhs.dat \
+            --guess data/guess.dat \
+            --ref data/sol.dat \
+            --config data/options.json
