@@ -25,12 +25,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show Python and PETSc versions
+      - name: Show Python and PETSc info
         run: |
-          python3 -c "import sys; print('Python:', sys.version)"
           python3 - << 'EOF'
+          import sys
           from petsc4py import PETSc
-          PETSc.Sys.Print("PETSc version: %s" % (PETSc.GetVersion(),))
+
+          # Basic Python info
+          print("Python:", sys.version)
+
+          # PETSc/petsc4py info
+          PETSc.Sys.Print("petsc4py imported OK.")
+          # Try to get version info in a safe way
+          if hasattr(PETSc.Sys, "getVersion"):
+              ver = PETSc.Sys.getVersion()
+              PETSc.Sys.Print("PETSc version (Sys.getVersion): %s" % (ver,))
+          else:
+              PETSc.Sys.Print("PETSc version helper not available in this build.")
           EOF
 
       - name: Run tiny smoke test (small in-memory system)
