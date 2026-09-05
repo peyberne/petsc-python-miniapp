@@ -3,13 +3,18 @@
 Benchmark PETSc solver with different options.
 Optionally compares each solution to a reference solution (sol.dat).
 """
+import argparse
 import sys
 import time
 import itertools
-from petsc4py import PETSc
+import statistics
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+
+if __name__ != "__main__" or "--plot-results" not in sys.argv:
+    from petsc4py import PETSc
 
 def load_options_from_json(path):
     """Load solver options from a JSON file and return a list of configuration dicts.
@@ -156,9 +161,158 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
         'error_l1': error_l1,
     }
 
+def test_positive_quadratic_forms(mat, number_of_tests=10, tolerance=0.0):
+    """Look for vectors v for which v^H A v <= tolerance.
+
+    Passing does not prove positive definiteness.
+    Failing proves that the matrix is not positive definite.
+    """
+
+    nrows, ncols = mat.getSize()
+
+    if nrows != ncols:
+        return False
+
+    x = mat.createVecRight()
+    ax = mat.createVecLeft()
+
+    passed = True
+    minimum_value = float("inf")
+
+    try:
+        random_context = PETSc.Random().create(comm=PETSc.COMM_WORLD)
+
+        for test_number in range(number_of_tests):
+            x.setRandom(random_context)
+            mat.mult(x, ax)
+
+            # dot() is conjugating for complex PETSc scalars.
+            quadratic_form = x.dot(ax)
+            real_value = float(np.real(quadratic_form))
+            minimum_value = min(minimum_value, real_value)
+
+            PETSc.Sys.Print(
+                f"Quadratic-form test {test_number + 1}: "
+                f"x^H A x = {quadratic_form}"
+            )
+
+            if abs(np.imag(quadratic_form)) > 1e-10:
+                PETSc.Sys.Print(
+                    "  Non-negligible imaginary part: matrix is likely "
+                    "not Hermitian."
+                )
+                passed = False
+
+            if real_value <= tolerance:
+                passed = False
+
+        random_context.destroy()
+
+    finally:
+        x.destroy()
+        ax.destroy()
+
+    PETSc.Sys.Print(
+        f"Minimum sampled x^H A x: {minimum_value:.6e}"
+    )
+
+    if passed:
+        PETSc.Sys.Print(
+            "All sampled quadratic forms were positive. "
+            "This is evidence, not proof, of positive definiteness."
+        )
+    else:
+        PETSc.Sys.Print(
+            "A non-positive quadratic form was found: "
+            "the matrix is not positive definite."
+        )
+
+    return passed
+
+def inspect_matrix_properties(mat, symmetry_tol=1e-12):
+    """Inspect structural and numerical matrix properties.
+
+    Symmetry is tested numerically.
+    Positive definiteness is not proven unless PETSc already knows the SPD flag.
+    """
+
+    nrows, ncols = mat.getSize()
+
+    PETSc.Sys.Print("\n=== Matrix properties ===")
+    PETSc.Sys.Print(f"Shape: {nrows} x {ncols}")
+
+    if nrows != ncols:
+        PETSc.Sys.Print("Square: False")
+        PETSc.Sys.Print("Symmetric: False")
+        PETSc.Sys.Print("SPD: False")
+        return {
+            "square": False,
+            "structurally_symmetric": False,
+            "symmetric": False,
+            "spd_known": False,
+            "spd": False,
+        }
+
+    PETSc.Sys.Print("Square: True")
+
+    # Cheap structural test: compares sparsity pattern, not values.
+    try:
+        structurally_symmetric = mat.isStructurallySymmetric()
+    except PETSc.Error:
+        structurally_symmetric = None
+        PETSc.Sys.Print(
+            f"Structural symmetry test not supported for {mat.getType()}"
+        )
+    PETSc.Sys.Print(
+        f"Structurally symmetric: {structurally_symmetric}"
+    )
+
+    # Numerical symmetry test. This is collective and can be expensive.
+    symmetric = mat.isSymmetric(tol=symmetry_tol)
+    PETSc.Sys.Print(
+        f"Numerically symmetric, tolerance={symmetry_tol:.1e}: {symmetric}"
+    )
+
+    # PETSc may already have a symmetry flag attached to the matrix.
+    symmetric_set, symmetric_flag = mat.isSymmetricKnown()
+    PETSc.Sys.Print(
+        f"PETSc symmetry flag known: {symmetric_set}"
+    )
+    if symmetric_set:
+        PETSc.Sys.Print(
+            f"PETSc stored symmetry flag: {symmetric_flag}"
+        )
+
+    # petsc4py does not expose MatIsSPDKnown consistently across all
+    # PETSc/petsc4py versions. Try the matrix option if available.
+    spd_known = False
+    spd = False
+
+    try:
+        spd = bool(mat.getOption(PETSc.Mat.Option.SPD))
+        spd_known = spd
+    except (AttributeError, TypeError, PETSc.Error):
+        pass
+
+    if spd_known:
+        PETSc.Sys.Print(f"PETSc SPD flag: {spd}")
+    else:
+        PETSc.Sys.Print(
+            "SPD: unknown; symmetry alone does not prove positive definiteness"
+        )
+
+    return {
+        "square": True,
+        "structurally_symmetric": structurally_symmetric,
+        "symmetric": symmetric,
+        "symmetry_flag_known": symmetric_set,
+        "symmetry_flag": symmetric_flag if symmetric_set else None,
+        "spd_known": spd_known,
+        "spd": spd if spd_known else None,
+    }
 
 def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
-                   use_gpu=False, config_file=None):
+                   use_gpu=False, config_file=None, repetitions=1):
     """Run all benchmarks."""
 
     # Load data
@@ -166,6 +320,20 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
     mat, rhs, guess, ref_sol = load_petsc_data(
         mat_file, rhs_file, guess_file, ref_file, use_gpu=use_gpu
     )
+
+    matrix_properties = inspect_matrix_properties(
+        mat,
+        symmetry_tol=1e-12,
+    )
+
+    if matrix_properties["symmetric"]:
+        sampled_positive = test_positive_quadratic_forms(
+            mat,
+            number_of_tests=10,
+            tolerance=0.0,
+        )
+    else:
+        sampled_positive = False
 
     size = PETSc.COMM_WORLD.getSize()
     PETSc.Sys.Print(f"Running with {size} MPI process(es).")
@@ -222,23 +390,37 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             ksp_type = combo[2]
             use_guess = combo[3]
 
-        label = f"{ksp_type}+{pc_type}"
+        guess_label = "guess" if use_guess else "zero"
+        label = f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
         PETSc.Sys.Print(f"[{i+1}/{len(combinations)}] Test: {label}")
 
-        result = solve_with_options(
-            mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess
-        )
+        samples = []
+        for repetition in range(repetitions):
+            PETSc.Sys.Print(f"  Repetition {repetition + 1}/{repetitions}")
+            samples.append(solve_with_options(
+                mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess
+            ))
 
-        result['ksp_type'] = ksp_type
-        result['pc_type'] = pc_type
-        result['label'] = label
+        median_time = statistics.median(sample["time"] for sample in samples)
+        result = min(samples, key=lambda sample: abs(sample["time"] - median_time))
+        result = result.copy()
+        result["time"] = median_time
+        result["time_samples"] = [sample["time"] for sample in samples]
+        result["converged"] = all(sample["converged"] for sample in samples)
+        result["mpi_processes"] = size
+
+        result["ksp_type"] = ksp_type
+        result["pc_type"] = pc_type
+        result["ksp_rtol"] = rtol
+        result["use_initial_guess"] = use_guess
+        result["label"] = label
 
         err_str = ""
         if result['error_l1'] is not None and result['error_l1'] != float('inf'):
             err_str = f", Error L1 vs ref: {result['error_l1']:.6e}"
 
         PETSc.Sys.Print(
-            f"  Time: {result['time']:.4f}s, "
+            f"  Median TTS: {result['time']:.4f}s, "
             f"Converged: {result['converged']}, "
             f"Iterations: {result['iterations']}, "
             f"Residual: {result['residual']:.2e}, "
@@ -258,133 +440,130 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
 
     return results
 
-def plot_results(results, output_file='results/benchmark_results.png'):
-    """Create a plot of the results."""
+def save_results(results, output_file):
+    """Save one MPI-size benchmark result set."""
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mpi_processes": PETSc.COMM_WORLD.getSize(),
+        "results": results,
+    }
+    with output_path.open("w") as output:
+        json.dump(payload, output, indent=2)
+    print(f"Results saved: {output_path}")
 
-    # Filter converged results
-    converged_results = [r for r in results if r['converged']]
-    failed_results = [r for r in results if not r['converged']]
 
-    if not converged_results:
-        print("No solution converged!")
-        return
+def plot_scaling_results(result_files, output_file='results/benchmark_results.png'):
+    """Plot median time to solution against the number of MPI processes."""
+    datasets = []
+    for result_file in result_files:
+        with Path(result_file).open() as source:
+            datasets.append(json.load(source))
 
-    # Sort by time
-    converged_results.sort(key=lambda x: x['time'])
+    mpi_counts = sorted({dataset["mpi_processes"] for dataset in datasets})
+    series = {}
+    failed_points = []
+    failed_labels = set()
+    for dataset in datasets:
+        mpi_processes = dataset["mpi_processes"]
+        for result in dataset["results"]:
+            series.setdefault(result["label"], {})[mpi_processes] = result["time"]
+            if not result["converged"]:
+                failed_points.append((result["label"], mpi_processes, result["time"]))
+                failed_labels.add(result["label"])
 
-    labels = [r['label'] for r in converged_results]
-    times = [r['time'] for r in converged_results]
-    iterations = [r['iterations'] for r in converged_results]
+    if not series:
+        raise RuntimeError("No converged solutions are available to plot")
 
-    # Create the plot
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+    fig, ax = plt.subplots(figsize=(11, 7))
+    colors = plt.get_cmap('tab20').colors
+    for index, (label, points) in enumerate(sorted(series.items())):
+        x_values = sorted(points)
+        y_values = [points[mpi_processes] for mpi_processes in x_values]
+        color = colors[index % len(colors)]
+        ax.plot(
+            x_values,
+            y_values,
+            marker='o',
+            linewidth=2,
+            linestyle='--' if label in failed_labels else '-',
+            color=color,
+            label=label,
+        )
+        failed_curve_points = [point for point in failed_points if point[0] == label]
+        if failed_curve_points:
+            ax.scatter(
+                [point[1] for point in failed_curve_points],
+                [point[2] for point in failed_curve_points],
+                marker='x',
+                s=70,
+                linewidths=2,
+                color=color,
+                zorder=5,
+            )
 
-    # Time plot
-    colors = ['green' if t == min(times) else 'blue' for t in times]
-    bars1 = ax1.barh(range(len(labels)), times, color=colors, alpha=0.7)
-    ax1.set_yticks(range(len(labels)))
-    ax1.set_yticklabels(labels, fontsize=9)
-    ax1.set_xlabel('Solve time (seconds)', fontsize=11)
-    ax1.set_title('PETSc Benchmark - Solve time by configuration', fontsize=13, fontweight='bold')
-    ax1.grid(axis='x', alpha=0.3)
+    ax.set_xlabel('Number of MPI processes', fontsize=11)
+    ax.set_ylabel('Median time to solution (seconds)', fontsize=11)
+    ax.set_title('PETSc GPU strong scaling', fontsize=13, fontweight='bold')
+    ax.set_xticks(mpi_counts)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=9)
 
-    # Add values on bars
-    for i, (bar, time_val) in enumerate(zip(bars1, times)):
-        ax1.text(time_val, i, f' {time_val:.3f}s', va='center', fontsize=8)
-
-    # Iterations plot
-    colors2 = ['orange' if it == min(iterations) else 'steelblue' for it in iterations]
-    bars2 = ax2.barh(range(len(labels)), iterations, color=colors2, alpha=0.7)
-    ax2.set_yticks(range(len(labels)))
-    ax2.set_yticklabels(labels, fontsize=9)
-    ax2.set_xlabel('Number of iterations', fontsize=11)
-    ax2.set_title('Number of iterations by configuration', fontsize=13, fontweight='bold')
-    ax2.grid(axis='x', alpha=0.3)
-
-    # Add values
-    for i, (bar, it) in enumerate(zip(bars2, iterations)):
-        ax2.text(it, i, f' {it}', va='center', fontsize=8)
-
-    # Add info about failures
-    if failed_results:
+    if failed_points:
         fig.text(
             0.5,
-            0.02,
-            f'Note: {len(failed_results)} configuration(s) did not converge',
+            0.01,
+            f'Dashed curves contain a non-converged point '
+            f'({len(failed_points)} point(s) total)',
             ha='center',
-            fontsize=10,
+            fontsize=9,
             style='italic',
             color='red',
         )
 
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"\nPlot saved: {output_file}")
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Scaling plot saved: {output_path}")
 
-    # Display top 3
-    print("\n=== TOP 3 fastest configurations ===")
-    for i, r in enumerate(converged_results[:3], 1):
-        print(f"{i}. {r['label']}: {r['time']:.4f}s ({r['iterations']} iterations)")
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mat")
+    parser.add_argument("--rhs")
+    parser.add_argument("--guess")
+    parser.add_argument("--ref")
+    parser.add_argument("--config")
+    parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--results-json")
+    parser.add_argument("--plot-results", nargs="+")
+    parser.add_argument("--output", default="results/benchmark_results.png")
+    args = parser.parse_args()
+
+    if args.plot_results:
+        return args
+    if not args.mat or not args.rhs:
+        parser.error("--mat and --rhs are required when running benchmarks")
+    if args.repetitions < 1:
+        parser.error("--repetitions must be at least 1")
+    return args
 
 
 if __name__ == "__main__":
+    args = parse_arguments()
 
-    # Default values
-    mat_file = None
-    rhs_file = None
-    guess_file = None
-    ref_file = None
-    use_gpu = False
-    config_file = None
-
-    # Parse arguments manually
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-
-        if arg == "--mat" and i + 1 < len(sys.argv):
-            mat_file = sys.argv[i + 1]
-            i += 1
-
-        elif arg == "--rhs" and i + 1 < len(sys.argv):
-            rhs_file = sys.argv[i + 1]
-            i += 1
-
-        elif arg == "--guess" and i + 1 < len(sys.argv):
-            guess_file = sys.argv[i + 1]
-            i += 1
-
-        elif arg == "--ref" and i + 1 < len(sys.argv):
-            ref_file = sys.argv[i + 1]
-            i += 1
-
-        elif arg == "--config" and i + 1 < len(sys.argv):
-            config_file = sys.argv[i + 1]
-            i += 1
-            
-        elif arg == "--gpu":
-            use_gpu = True
-
-        else:
-            PETSc.Sys.Print(f"Warning: ignoring unknown argument: {arg}")
-
-        i += 1
-
-    # Sanity checks
-    if mat_file is None or rhs_file is None:
-        print("Usage: python benchmark_petsc.py --mat mat.dat --rhs rhs.dat "
-              "[--guess guess.dat] [--ref sol.dat] [--config options.json] [--gpu]")
-        sys.exit(1)
-
-    # Run benchmark
-    results = run_benchmarks(
-        mat_file, rhs_file, guess_file, ref_file,
-        use_gpu=use_gpu,
-        config_file=config_file
-    )
-
-    # Plot (rank 0 only)
-    if PETSc.COMM_WORLD.getRank() == 0:
-        plot_results(results)
-
-    PETSc.Sys.Print("\nBenchmark completed!")
+    if args.plot_results:
+        plot_scaling_results(args.plot_results, args.output)
+    else:
+        results = run_benchmarks(
+            args.mat, args.rhs, args.guess, args.ref,
+            use_gpu=args.gpu,
+            config_file=args.config,
+            repetitions=args.repetitions,
+        )
+        if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
+            save_results(results, args.results_json)
+        PETSc.Sys.Print("\nBenchmark completed!")

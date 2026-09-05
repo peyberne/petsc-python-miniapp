@@ -2,12 +2,12 @@ module load nvhpc
 module load cuda
 module load cmake
 module load hdf5/1.14.3-mpi 
-export PETSC_DIR=/scratch/peyberne/petsc-install-python
-export PETSC_ROOT=/scratch/peyberne/petsc-install-python
-export PETSC_HOME=/scratch/peyberne/petsc-install-python
+export PETSC_DIR=/home/peyberne/Codes/petsc-install-3.21.4-python
+export PETSC_ROOT=/home/peyberne/Codes/petsc-install-3.21.4-python
+export PETSC_HOME=/home/peyberne/Codes/petsc-install-3.21.4-python
 . /home/peyberne/spack/share/spack/setup-env.sh 
 spack load json-fortran@8.3.0%nvhpc@24.7
-source /scratch/peyberne/petsc/myenv/bin/activate
+source /home/peyberne/Codes/petsc-python-miniapp/myenv/bin/activate
 export PYTHONPATH=$PETSC_DIR/$PETSC_ARCH/lib:$PYTHONPATH
 # GPU DIRECT
 # For MPICH/Cray MPICH:

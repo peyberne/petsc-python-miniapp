@@ -24,6 +24,7 @@ module load hdf5/1.14.3-mpi
 source myenv/bin/activate
 
 pip install numpy
+pip install matplotlib
 pip install 'Cython>=3.0.0,<3.1.0'
 ```
 
@@ -106,6 +107,25 @@ Submit the job with:
 sbatch submission_script.sh
 ```
 
+By default, the submission benchmarks 1, 2, and 4 MPI processes with one GPU
+per process and reports the median of three solves. The MPI counts and number
+of repetitions can be changed through exported environment variables:
+
+```bash
+sbatch --export=ALL,MPI_COUNTS=1:2:4,REPETITIONS=3 submission_script.sh
+```
+
+For a multi-node run, request enough nodes/tasks and include larger MPI counts.
+Kuma has four H100 GPUs per node, for example:
+
+```bash
+sbatch --nodes=2 --ntasks=8 \
+  --export=ALL,MPI_COUNTS=1:2:4:8,REPETITIONS=3 submission_script.sh
+```
+
+Use colons between MPI counts when passing `MPI_COUNTS` through
+`sbatch --export`; Slurm uses commas to separate exported variables.
+
 The script internally runs something like:
 
 ```bash
@@ -174,12 +194,9 @@ results/
  └── benchmark_results.png
 ```
 
-The plot includes:
-
-- solve time per configuration  
-- iteration counts  
-- convergence failures  
-- **L1 error vs reference solution (sol.dat)**  
+The plot shows the median time to solution against the number of MPI processes,
+with one curve for each KSP solver and preconditioner combination. Raw timing
+samples and solver results are stored in `results/scaling_<job>_<mpi>.json`.
 
 ---
 
