@@ -465,12 +465,13 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
 
     return results
 
-def save_results(results, output_file):
+def save_results(results, output_file, test_case=None):
     """Save one MPI-size benchmark result set."""
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "mpi_processes": PETSc.COMM_WORLD.getSize(),
+        "test_case": test_case,
         "results": results,
     }
     with output_path.open("w") as output:
@@ -484,6 +485,14 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
     for result_file in result_files:
         with Path(result_file).open() as source:
             datasets.append(json.load(source))
+
+    # Extract test case name from first dataset
+    test_case = None
+    for ds in datasets:
+        tc = ds.get("test_case")
+        if tc:
+            test_case = tc
+            break
 
     mpi_counts = sorted({dataset["mpi_processes"] for dataset in datasets})
     series = {}
@@ -538,7 +547,10 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
                 zorder=5,
             )
 
-    ax.set_title('PETSc GPU strong scaling', fontsize=13, fontweight='bold')
+    title = 'PETSc GPU strong scaling'
+    if test_case:
+        title += f' — {test_case}'
+    ax.set_title(title, fontsize=13, fontweight='bold')
     if param_str:
         ax.set_xlabel(f'Number of MPI processes  ({param_str})', fontsize=11)
     else:
@@ -567,10 +579,10 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
     print(f"Scaling plot saved: {output_path}")
 
     # Generate ranking figures
-    plot_scaling_rankings(datasets, output_path.parent)
+    plot_scaling_rankings(datasets, output_path.parent, test_case=test_case)
 
 
-def plot_scaling_rankings(datasets, output_dir):
+def plot_scaling_rankings(datasets, output_dir, test_case=None):
     """Generate ranking figures by TTS and by iterations for each MPI count."""
     output_dir = Path(output_dir)
 
@@ -628,7 +640,10 @@ def plot_scaling_rankings(datasets, output_dir):
             marker = "" if c else " x"
             ax.text(t, i, f" {t:.2f}s{marker}", va="center", fontsize=7)
 
-    fig.suptitle(f"Ranking by Time to Solution  ({param_str})", fontsize=14, fontweight="bold", y=1.01)
+    tts_suptitle = f"Ranking by Time to Solution  ({param_str})"
+    if test_case:
+        tts_suptitle += f"  — {test_case}"
+    fig.suptitle(tts_suptitle, fontsize=14, fontweight="bold", y=1.01)
     fig.tight_layout()
     tts_path = output_dir / "ranking_tts.png"
     fig.savefig(tts_path, dpi=150, bbox_inches="tight")
@@ -665,7 +680,10 @@ def plot_scaling_rankings(datasets, output_dir):
             marker = "" if c else " x"
             ax.text(it, i, f" {it}{marker}", va="center", fontsize=7)
 
-    fig.suptitle(f"Ranking by Iterations  ({param_str})", fontsize=14, fontweight="bold", y=1.01)
+    iter_suptitle = f"Ranking by Iterations  ({param_str})"
+    if test_case:
+        iter_suptitle += f"  — {test_case}"
+    fig.suptitle(iter_suptitle, fontsize=14, fontweight="bold", y=1.01)
     fig.tight_layout()
     iter_path = output_dir / "ranking_iterations.png"
     fig.savefig(iter_path, dpi=150, bbox_inches="tight")
@@ -683,6 +701,7 @@ def parse_arguments():
     parser.add_argument("--gpu", action="store_true")
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--results-json")
+    parser.add_argument("--test-case")
     parser.add_argument("--plot-results", nargs="+")
     parser.add_argument("--output", default="results/benchmark_results.png")
     args = parser.parse_args()
@@ -709,5 +728,5 @@ if __name__ == "__main__":
             repetitions=args.repetitions,
         )
         if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
-            save_results(results, args.results_json)
+            save_results(results, args.results_json, test_case=args.test_case)
         PETSc.Sys.Print("\nBenchmark completed!")

@@ -15,6 +15,8 @@ set -euo pipefail
 
 # Input files (adapt according to your files)
 DATA_DIR="/scratch/peyberne/test_miniapp/data/TCV_3D_fine_ES/vorticity"
+# Extract test case name from DATA_DIR (last two directory components)
+TEST_CASE=$(basename "$(dirname "$DATA_DIR")")/$(basename "$DATA_DIR")
 MATRIX_FILE="$DATA_DIR/mat_vorticity.dat"
 RHS_FILE="$DATA_DIR/rhs_vorticity.dat"
 GUESS_FILE="$DATA_DIR/guess_vorticity.dat"
@@ -22,7 +24,7 @@ REF_FILE="$DATA_DIR/sol_vorticity.dat"
 CONFIG_FILE="$SCRIPT_DIR/data/options.json"
 # Use colons with sbatch --export because Slurm reserves commas as separators.
 MPI_COUNTS=${MPI_COUNTS:-1:2:4}
-REPETITIONS=${REPETITIONS:-1}
+REPETITIONS=${REPETITIONS:-3}
 
 echo "=========================================="
 echo "Starting PETSc benchmark"
@@ -68,6 +70,7 @@ for MPI_COUNT in "${MPI_COUNT_LIST[@]}"; do
         --config "$CONFIG_FILE" \
         --repetitions "$REPETITIONS" \
         --results-json "$RESULT_FILE" \
+        --test-case "$TEST_CASE" \
         --gpu
 done
 
