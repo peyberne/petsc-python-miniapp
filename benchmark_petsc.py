@@ -23,10 +23,16 @@ def load_options_from_json(path):
 
     {
       "ksp_rtol": [1e-13],
-      "pc_type": ["gamg", "pbjacobi"],
+      "pc_type": ["gamg", "pbjacobi", "sor"],
       "ksp_type": ["gmres", "bcgs"],
-      "use_initial_guess": [true]
+      "use_initial_guess": [true],
+      "pc_options": {
+        "sor": ["pc_sor_local_symmetric"]
+      }
     }
+
+    The optional "pc_options" dict maps pc_type values to lists of extra PETSc
+    options that are set only when that preconditioner is used.
     """
     with open(path, "r") as f:
         opts = json.load(f)
@@ -36,12 +42,17 @@ def load_options_from_json(path):
         if k not in opts:
             raise ValueError(f"Missing required key '{k}' in config file: {path}")
 
-    keys = list(opts.keys())
+    pc_options = opts.get("pc_options", {})
+
+    keys = [k for k in opts.keys() if k != "pc_options"]
     lists = [opts[k] for k in keys]
 
     config_list = []
     for combo in itertools.product(*lists):
         entry = {key: value for key, value in zip(keys, combo)}
+        pc_type = entry.get("pc_type")
+        if pc_type in pc_options:
+            entry["petsc_options"] = pc_options[pc_type]
         config_list.append(entry)
 
     return config_list
@@ -396,15 +407,34 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             pc_type = combo["pc_type"]
             ksp_type = combo["ksp_type"]
             use_guess = combo["use_initial_guess"]
+            config_petsc_opts = combo.get("petsc_options", [])
         else:
             rtol = combo[0]
             pc_type = combo[1]
             ksp_type = combo[2]
             use_guess = combo[3]
+            config_petsc_opts = []
 
         guess_label = "guess" if use_guess else "zero"
         label = f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
         PETSc.Sys.Print(f"[{i+1}/{len(combinations)}] Test: {label}")
+
+        # Apply per-config PETSc options (clear previous, then set)
+        all_opts = PETSc.Options()
+        all_opts.delAll()
+        if petsc_options:
+            for opt in petsc_options:
+                if "=" in opt:
+                    k, v = opt.split("=", 1)
+                    all_opts.setValue(k, v)
+                else:
+                    all_opts.setValue(opt, 1)
+        for opt in config_petsc_opts:
+            if "=" in opt:
+                k, v = opt.split("=", 1)
+                all_opts.setValue(k, v)
+            else:
+                all_opts.setValue(opt, 1)
 
         samples = []
         for repetition in range(repetitions):
