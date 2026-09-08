@@ -500,6 +500,17 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
     if not series:
         raise RuntimeError("No converged solutions are available to plot")
 
+    # Extract common solver parameters from first result
+    sample = datasets[0]["results"][0]
+    rtol = sample.get("ksp_rtol", None)
+    use_guess = sample.get("use_initial_guess", None)
+    param_parts = []
+    if rtol is not None:
+        param_parts.append(f"rtol = {rtol:.0e}")
+    if use_guess is not None:
+        param_parts.append(f"initial guess = {'yes' if use_guess else 'no'}")
+    param_str = "  |  ".join(param_parts)
+
     fig, ax = plt.subplots(figsize=(11, 7))
     colors = plt.get_cmap('tab20').colors
     for index, (label, points) in enumerate(sorted(series.items())):
@@ -527,9 +538,11 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
                 zorder=5,
             )
 
-    ax.set_xlabel('Number of MPI processes', fontsize=11)
-    ax.set_ylabel('Median time to solution (seconds)', fontsize=11)
     ax.set_title('PETSc GPU strong scaling', fontsize=13, fontweight='bold')
+    if param_str:
+        ax.set_xlabel(f'Number of MPI processes  ({param_str})', fontsize=11)
+    else:
+        ax.set_xlabel('Number of MPI processes', fontsize=11)
     ax.set_xticks(mpi_counts)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=9)
@@ -575,6 +588,17 @@ def plot_scaling_rankings(datasets, output_dir):
     cmap = plt.get_cmap('tab20')
     color_map = {label: cmap(i % 20) for i, label in enumerate(all_labels)}
 
+    # Extract common solver parameters
+    sample = datasets[0]["results"][0]
+    rtol = sample.get("ksp_rtol", None)
+    use_guess = sample.get("use_initial_guess", None)
+    param_parts = []
+    if rtol is not None:
+        param_parts.append(f"rtol = {rtol:.0e}")
+    if use_guess is not None:
+        param_parts.append(f"initial guess = {'yes' if use_guess else 'no'}")
+    param_str = "  |  ".join(param_parts)
+
     # --- Ranking by TTS ---
     fig, axes = plt.subplots(1, n_mpi, figsize=(7 * n_mpi, max(6, len(all_labels) * 0.45)),
                              sharey=False)
@@ -604,7 +628,7 @@ def plot_scaling_rankings(datasets, output_dir):
             marker = "" if c else " x"
             ax.text(t, i, f" {t:.2f}s{marker}", va="center", fontsize=7)
 
-    fig.suptitle("Ranking by Time to Solution", fontsize=14, fontweight="bold", y=1.01)
+    fig.suptitle(f"Ranking by Time to Solution  ({param_str})", fontsize=14, fontweight="bold", y=1.01)
     fig.tight_layout()
     tts_path = output_dir / "ranking_tts.png"
     fig.savefig(tts_path, dpi=150, bbox_inches="tight")
@@ -641,7 +665,7 @@ def plot_scaling_rankings(datasets, output_dir):
             marker = "" if c else " x"
             ax.text(it, i, f" {it}{marker}", va="center", fontsize=7)
 
-    fig.suptitle("Ranking by Iterations", fontsize=14, fontweight="bold", y=1.01)
+    fig.suptitle(f"Ranking by Iterations  ({param_str})", fontsize=14, fontweight="bold", y=1.01)
     fig.tight_layout()
     iter_path = output_dir / "ranking_iterations.png"
     fig.savefig(iter_path, dpi=150, bbox_inches="tight")
