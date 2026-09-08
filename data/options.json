@@ -1,6 +1,9 @@
 {
-  "ksp_rtol": [1e-9],
-    "pc_type": ["gamg", "mg", "pbjacobi","jacobi"],
-  "ksp_type": ["gmres", "bcgs","tfqmr","bcgsl","fgmres"],
-  "use_initial_guess": [true]
+  "ksp_rtol": [1e-10],
+  "pc_type": ["gamg", "pbjacobi", "jacobi", "sor"],
+  "ksp_type": ["gmres", "bcgs", "tfqmr", "bcgsl", "fgmres"],
+  "use_initial_guess": [true],
+  "pc_options": {
+    "sor": ["pc_sor_local_symmetric"]
+  }
 }
