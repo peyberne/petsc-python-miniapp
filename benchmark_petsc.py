@@ -430,6 +430,31 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
 
         results.append(result)
 
+    # Print rankings for this MPI count
+    by_tts = sorted(enumerate(results), key=lambda r: r[1]['time'])
+    by_iter = sorted(
+        enumerate(results),
+        key=lambda r: r[1]['iterations'] if r[1]['iterations'] >= 0 else float('inf'),
+    )
+
+    PETSc.Sys.Print("=== Ranking by TTS (fastest first) ===")
+    for rank, (idx, r) in enumerate(by_tts, 1):
+        status = "ok" if r['converged'] else "FAIL"
+        PETSc.Sys.Print(
+            f"  {rank}. {r['label']} | {r['time']:.4f}s | "
+            f"{r['iterations']} it | {status}"
+        )
+
+    PETSc.Sys.Print("\n=== Ranking by iterations (fewest first) ===")
+    for rank, (idx, r) in enumerate(by_iter, 1):
+        status = "ok" if r['converged'] else "FAIL"
+        PETSc.Sys.Print(
+            f"  {rank}. {r['label']} | {r['iterations']} it | "
+            f"{r['time']:.4f}s | {status}"
+        )
+
+    PETSc.Sys.Print("")
+
     # Cleanup
     mat.destroy()
     rhs.destroy()
@@ -527,6 +552,101 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"Scaling plot saved: {output_path}")
+
+    # Generate ranking figures
+    plot_scaling_rankings(datasets, output_path.parent)
+
+
+def plot_scaling_rankings(datasets, output_dir):
+    """Generate ranking figures by TTS and by iterations for each MPI count."""
+    output_dir = Path(output_dir)
+
+    mpi_counts = sorted({d["mpi_processes"] for d in datasets})
+    n_mpi = len(mpi_counts)
+
+    # Collect per-MPI-count data
+    mpi_data = {}
+    for dataset in datasets:
+        mpi = dataset["mpi_processes"]
+        mpi_data[mpi] = dataset["results"]
+
+    # Common labels across all MPI counts
+    all_labels = sorted({r["label"] for d in datasets for r in d["results"]})
+    cmap = plt.get_cmap('tab20')
+    color_map = {label: cmap(i % 20) for i, label in enumerate(all_labels)}
+
+    # --- Ranking by TTS ---
+    fig, axes = plt.subplots(1, n_mpi, figsize=(7 * n_mpi, max(6, len(all_labels) * 0.45)),
+                             sharey=False)
+    if n_mpi == 1:
+        axes = [axes]
+
+    for ax, mpi in zip(axes, mpi_counts):
+        results = sorted(mpi_data[mpi], key=lambda r: r["time"])
+        labels = [r["label"] for r in results]
+        times = [r["time"] for r in results]
+        converged = [r["converged"] for r in results]
+        bar_colors = [color_map[l] for l in labels]
+        edge_colors = ["black" if c else "red" for c in converged]
+        linewidths = [1.5 if not c else 0.5 for c in converged]
+
+        y_pos = range(len(labels))
+        bars = ax.barh(y_pos, times, color=bar_colors, edgecolor=edge_colors,
+                       linewidth=linewidths, alpha=0.85)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Median TTS (s)", fontsize=10)
+        ax.set_title(f"{mpi} MPI", fontsize=12, fontweight="bold")
+        ax.grid(axis="x", alpha=0.3)
+
+        for i, (bar, t, c) in enumerate(zip(bars, times, converged)):
+            marker = "" if c else " x"
+            ax.text(t, i, f" {t:.2f}s{marker}", va="center", fontsize=7)
+
+    fig.suptitle("Ranking by Time to Solution", fontsize=14, fontweight="bold", y=1.01)
+    fig.tight_layout()
+    tts_path = output_dir / "ranking_tts.png"
+    fig.savefig(tts_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"TTS ranking saved: {tts_path}")
+
+    # --- Ranking by iterations ---
+    fig, axes = plt.subplots(1, n_mpi, figsize=(7 * n_mpi, max(6, len(all_labels) * 0.45)),
+                             sharey=False)
+    if n_mpi == 1:
+        axes = [axes]
+
+    for ax, mpi in zip(axes, mpi_counts):
+        results = sorted(mpi_data[mpi],
+                         key=lambda r: r["iterations"] if r["iterations"] >= 0 else float("inf"))
+        labels = [r["label"] for r in results]
+        iters = [max(r["iterations"], 0) for r in results]
+        converged = [r["converged"] for r in results]
+        bar_colors = [color_map[l] for l in labels]
+        edge_colors = ["black" if c else "red" for c in converged]
+        linewidths = [1.5 if not c else 0.5 for c in converged]
+
+        y_pos = range(len(labels))
+        bars = ax.barh(y_pos, iters, color=bar_colors, edgecolor=edge_colors,
+                       linewidth=linewidths, alpha=0.85)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Iterations", fontsize=10)
+        ax.set_title(f"{mpi} MPI", fontsize=12, fontweight="bold")
+        ax.grid(axis="x", alpha=0.3)
+
+        for i, (bar, it, c) in enumerate(zip(bars, iters, converged)):
+            marker = "" if c else " x"
+            ax.text(it, i, f" {it}{marker}", va="center", fontsize=7)
+
+    fig.suptitle("Ranking by Iterations", fontsize=14, fontweight="bold", y=1.01)
+    fig.tight_layout()
+    iter_path = output_dir / "ranking_iterations.png"
+    fig.savefig(iter_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Iteration ranking saved: {iter_path}")
 
 
 def parse_arguments():
