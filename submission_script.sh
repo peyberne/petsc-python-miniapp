@@ -24,7 +24,9 @@ REF_FILE="$DATA_DIR/sol_vorticity.dat"
 CONFIG_FILE="$SCRIPT_DIR/data/options.json"
 # Use colons with sbatch --export because Slurm reserves commas as separators.
 MPI_COUNTS=${MPI_COUNTS:-1:2:4}
-REPETITIONS=${REPETITIONS:-3}
+REPETITIONS=${REPETITIONS:-1}
+# Extra PETSc options (colon-separated for sbatch --export)
+PETSC_EXTRA_OPTS=${PETSC_EXTRA_OPTS:-}
 
 echo "=========================================="
 echo "Starting PETSc benchmark"
@@ -58,6 +60,10 @@ for MPI_COUNT in "${MPI_COUNT_LIST[@]}"; do
     RESULT_FILE="$SCRIPT_DIR/results/scaling_${SLURM_JOB_ID}_${MPI_COUNT}.json"
     RESULT_FILES+=("$RESULT_FILE")
     echo "Running benchmark with $MPI_COUNT MPI process(es)"
+    PETSC_ARGS=()
+    if [ -n "$PETSC_EXTRA_OPTS" ]; then
+        IFS=':' read -ra PETSC_ARGS <<< "$PETSC_EXTRA_OPTS"
+    fi
     srun --ntasks="$MPI_COUNT" \
         --cpus-per-task="$SLURM_CPUS_PER_TASK" \
         --gpus-per-task=1 \
@@ -71,6 +77,7 @@ for MPI_COUNT in "${MPI_COUNT_LIST[@]}"; do
         --repetitions "$REPETITIONS" \
         --results-json "$RESULT_FILE" \
         --test-case "$TEST_CASE" \
+        --petsc-options "${PETSC_ARGS[@]+"${PETSC_ARGS[@]}"}" \
         --gpu
 done
 

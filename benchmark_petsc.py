@@ -312,7 +312,8 @@ def inspect_matrix_properties(mat, symmetry_tol=1e-12):
     }
 
 def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
-                   use_gpu=False, config_file=None, repetitions=1):
+                   use_gpu=False, config_file=None, repetitions=1,
+                   petsc_options=None):
     """Run all benchmarks."""
 
     # Load data
@@ -320,6 +321,17 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
     mat, rhs, guess, ref_sol = load_petsc_data(
         mat_file, rhs_file, guess_file, ref_file, use_gpu=use_gpu
     )
+
+    # Apply extra PETSc options
+    if petsc_options:
+        opts = PETSc.Options()
+        for opt in petsc_options:
+            if "=" in opt:
+                key, val = opt.split("=", 1)
+                opts.setValue(key, val)
+            else:
+                opts.setValue(opt, 1)
+        PETSc.Sys.Print(f"Extra PETSc options: {petsc_options}")
 
     matrix_properties = inspect_matrix_properties(
         mat,
@@ -702,6 +714,8 @@ def parse_arguments():
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--results-json")
     parser.add_argument("--test-case")
+    parser.add_argument("--petsc-options", nargs="*", default=[],
+                        help="Extra PETSc options, e.g. --petsc-options pc_sor_local_symmetric")
     parser.add_argument("--plot-results", nargs="+")
     parser.add_argument("--output", default="results/benchmark_results.png")
     args = parser.parse_args()
@@ -726,6 +740,7 @@ if __name__ == "__main__":
             use_gpu=args.gpu,
             config_file=args.config,
             repetitions=args.repetitions,
+            petsc_options=args.petsc_options,
         )
         if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
             save_results(results, args.results_json, test_case=args.test_case)
