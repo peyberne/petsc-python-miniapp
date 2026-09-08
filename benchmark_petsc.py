@@ -421,7 +421,8 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
 
         # Apply per-config PETSc options (clear previous, then set)
         all_opts = PETSc.Options()
-        all_opts.delAll()
+        for key in all_opts.getAll():
+            del all_opts[key]
         if petsc_options:
             for opt in petsc_options:
                 if "=" in opt:
