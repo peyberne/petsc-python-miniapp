@@ -60,36 +60,51 @@ def load_options_from_json(path):
 def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=False):
     """Load matrix, RHS, initial guess, and optional reference solution from PETSc binary files."""
 
-    # If GPU requested, set types BEFORE loading to avoid CPU→GPU copy
+    mat_type = 'aijcusparse' if use_gpu else 'aij'
+    vec_type = 'cuda' if use_gpu else 'seq'
     if use_gpu:
-        PETSc.Sys.Print("Enabling GPU types via PETSc options...")
-        opts = PETSc.Options()
-        opts.setValue("mat_type", "aijcusparse")
-        opts.setValue("vec_type", "cuda")
+        PETSc.Sys.Print("Loading data directly into GPU format...")
 
     # Load matrix
     viewer_mat = PETSc.Viewer().createBinary(mat_file, 'r')
-    mat = PETSc.Mat().load(viewer_mat)
+    mat = PETSc.Mat().create(comm=PETSc.COMM_WORLD)
+    mat.setType(mat_type)
+    mat.load(viewer_mat)
     viewer_mat.destroy()
 
     # Load RHS
     viewer_rhs = PETSc.Viewer().createBinary(rhs_file, 'r')
-    rhs = PETSc.Vec().load(viewer_rhs)
+    rhs = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+    rhs.setType(vec_type)
+    rhs.load(viewer_rhs)
     viewer_rhs.destroy()
 
     # Load optional initial guess
     guess = None
     if guess_file:
         viewer_guess = PETSc.Viewer().createBinary(guess_file, 'r')
-        guess = PETSc.Vec().load(viewer_guess)
+        guess = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        guess.setType(vec_type)
+        guess.load(viewer_guess)
         viewer_guess.destroy()
 
     # Load optional reference solution
     ref_sol = None
     if ref_file:
         viewer_ref = PETSc.Viewer().createBinary(ref_file, 'r')
-        ref_sol = PETSc.Vec().load(viewer_ref)
+        ref_sol = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        ref_sol.setType(vec_type)
+        ref_sol.load(viewer_ref)
         viewer_ref.destroy()
+
+    # Verify GPU types loaded correctly
+    if use_gpu:
+        mat_type_name = mat.getType()
+        rhs_type_name = rhs.getType()
+        PETSc.Sys.Print(f"Matrix type: {mat_type_name}")
+        PETSc.Sys.Print(f"Vector type: {rhs_type_name}")
+        if 'cusparse' not in mat_type_name:
+            raise RuntimeError(f"GPU requested but matrix type is {mat_type_name}, expected aijcusparse")
 
     return mat, rhs, guess, ref_sol
 
