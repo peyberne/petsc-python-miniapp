@@ -1,44 +1,38 @@
 #!/bin/bash
-#SBATCH --nodes=8
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-task=1
-#SBATCH --partition h100
-#SBATCH --time=12:00:00
+#SBATCH --partition boost_fua_prod
+#SBATCH --time=2:00:00
 #SBATCH --output=benchmark_%j.log
 #SBATCH --error=benchmark_%j.err
 
-SCRIPT_DIR=${PROJECT_DIR:-/home/peyberne/Codes/petsc-python-miniapp}
+SCRIPT_DIR=/pitagora/home/userexternal/mpeybern/petsc-python-miniapp
 cd "$SCRIPT_DIR"
-source "$SCRIPT_DIR/env_kuma_python-petsc.sh"
+source "$SCRIPT_DIR/env_pitagora_python-petsc.sh"
 set -euo pipefail
 
-# Input files (adapt according to your files)
-DATA_DIR="/scratch/peyberne/test_prod_west"
-#DATA_DIR="/scratch/peyberne/test_miniapp/data/TCV_3D_fine_ES/vorticity"
-# Extract test case name from DATA_DIR (last two directory components)
-TEST_CASE=$(basename "$(dirname "$DATA_DIR")")/$(basename "$DATA_DIR")
+# Small test data (copy from Kuma or use local)
+DATA_DIR="/pitagora/home/userexternal/mpeybern/data/TCV_3D_fine_ES/vorticity"
+TEST_CASE="TCV_3D_fine_ES/vorticity"
 MATRIX_FILE="$DATA_DIR/mat_vorticity.dat"
 RHS_FILE="$DATA_DIR/rhs_vorticity.dat"
 GUESS_FILE="$DATA_DIR/guess_vorticity.dat"
 REF_FILE="$DATA_DIR/sol_vorticity.dat"
 CONFIG_FILE="$SCRIPT_DIR/data/options.json"
-# Use colons with sbatch --export because Slurm reserves commas as separators.
 MPI_COUNTS=${MPI_COUNTS:-1:2:4}
 REPETITIONS=${REPETITIONS:-1}
-# Extra PETSc options (colon-separated for sbatch --export)
 PETSC_EXTRA_OPTS=${PETSC_EXTRA_OPTS:-}
 
 echo "=========================================="
-echo "Starting PETSc benchmark"
+echo "Starting PETSc benchmark on Pitagora"
 echo "Date: $(date)"
 echo "Node: $(hostname)"
 echo "Allocated MPI processes: $SLURM_NTASKS"
 echo "MPI scaling points: $MPI_COUNTS"
-echo "Repetitions per configuration: $REPETITIONS"
 echo "=========================================="
 
-# Check that files exist
 for input_file in "$MATRIX_FILE" "$RHS_FILE" "$GUESS_FILE" "$REF_FILE" "$CONFIG_FILE"; do
     if [ ! -f "$input_file" ]; then
         echo "Error: Input file $input_file not found!"
@@ -84,9 +78,8 @@ done
 
 python3 "$SCRIPT_DIR/benchmark_petsc.py" \
     --plot-results "${RESULT_FILES[@]}" \
-    --output "$SCRIPT_DIR/results/benchmark_results.png"
+    --output "$SCRIPT_DIR/results/benchmark_results_pitagora.png"
 
 echo "=========================================="
-echo "Benchmark completed"
-echo "Date: $(date)"
+echo "Benchmark completed at $(date)"
 echo "=========================================="
