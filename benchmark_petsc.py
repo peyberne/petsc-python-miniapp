@@ -60,6 +60,13 @@ def load_options_from_json(path):
 def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=False):
     """Load matrix, RHS, initial guess, and optional reference solution from PETSc binary files."""
 
+    # If GPU requested, set types BEFORE loading to avoid CPU→GPU copy
+    if use_gpu:
+        PETSc.Sys.Print("Enabling GPU types via PETSc options...")
+        opts = PETSc.Options()
+        opts.setValue("mat_type", "aijcusparse")
+        opts.setValue("vec_type", "cuda")
+
     # Load matrix
     viewer_mat = PETSc.Viewer().createBinary(mat_file, 'r')
     mat = PETSc.Mat().load(viewer_mat)
@@ -83,21 +90,6 @@ def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=
         viewer_ref = PETSc.Viewer().createBinary(ref_file, 'r')
         ref_sol = PETSc.Vec().load(viewer_ref)
         viewer_ref.destroy()
-
-    # If GPU requested, tell PETSc to use GPU types
-    if use_gpu:
-        PETSc.Sys.Print("Enabling GPU types via PETSc options...")
-        opts = PETSc.Options()
-        opts.setValue("mat_type", "aijcusparse")
-        opts.setValue("vec_type", "cuda")
-
-        # Apply options to existing objects
-        mat.setFromOptions()
-        rhs.setFromOptions()
-        if guess:
-            guess.setFromOptions()
-        if ref_sol:
-            ref_sol.setFromOptions()
 
     return mat, rhs, guess, ref_sol
 
