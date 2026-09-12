@@ -70,6 +70,83 @@ python3 -c "import petsc4py; print(petsc4py.__version__)"
 
 ---
 
+## Pitagora (Boost partition)
+
+Pitagora provides an nvhpc PETSc module with CUDA support, so PETSc itself does
+not need to be built locally.
+
+### 1. Load PETSc and create the Python environment
+
+```bash
+module purge
+module load nvhpc/25.11
+module load petsc/3.22.0--hpcx-mpi--2.25.1--nvhpc--25.11-mumps
+
+python3 -m venv myenv
+source myenv/bin/activate
+python -m pip install numpy matplotlib wheel setuptools "Cython==3.0.12"
+```
+
+Cython 3.0.12 is used because petsc4py 3.22.0 does not build with Cython 3.3.0.
+
+### 2. Install petsc4py against the module PETSc
+
+The Pitagora linker may report that `/usr/lib64/libatomic.so.1.2.0` is missing.
+For the current user installation, a copy is available as
+`~/libatomic.so.1.2.0`. Create an unversioned linker name and add the directory
+to the build flags:
+
+```bash
+ln -sfn libatomic.so.1.2.0 "$HOME/libatomic.so"
+
+export PETSC_ARCH=
+export CFLAGS="-O3 -DNDEBUG"
+export CXXFLAGS="-O3 -DNDEBUG"
+export LDFLAGS="-L$HOME -Wl,-rpath,$HOME"
+
+python -m pip install petsc4py==3.22.0 \
+    --no-build-isolation \
+    --no-cache-dir
+```
+
+### 3. Load the runtime environment
+
+The repository contains the tested runtime setup:
+
+```bash
+source env_pitagora_python-petsc.sh
+```
+
+It loads nvhpc 25.11 and PETSc 3.22.0, activates `myenv`, and sets
+`OPAL_PREFIX` for the HPC-X Open MPI installation.
+
+Do not test CUDA-enabled petsc4py on a login node because `libcuda.so.1` is
+available only on GPU compute nodes. Submit a smoke test instead:
+
+```bash
+sbatch --nodes=1 --ntasks=1 --cpus-per-task=4 --gpus-per-task=1 \
+    --partition=boost_fua_dbg --time=00:05:00 \
+    --wrap='source env_pitagora_python-petsc.sh; srun python -c "from petsc4py import PETSc; A=PETSc.Mat().createAIJ([8,8]); A.setType(PETSc.Mat.Type.SEQAIJCUSPARSE); A.setUp(); print(PETSc.Sys.getVersion(), A.getType())"'
+```
+
+The expected matrix type is `seqaijcusparse`.
+
+### 4. Run on Boost
+
+Set the data paths in `submission_script_pitagora.sh`, then submit the scaling
+benchmark:
+
+```bash
+sbatch --export=ALL,MPI_COUNTS=1:2:4,REPETITIONS=3 \
+    submission_script_pitagora.sh
+```
+
+Use `bcgsl` with `gamg` for the transferred coarse vorticity case. The
+`bjacobi` and `ilu` configurations encounter zero pivots and return a NaN
+residual before the first iteration.
+
+---
+
 ## 4. Input files
 
 All PETSc binary input files should be placed in the `data/` directory:
@@ -209,5 +286,7 @@ samples and solver results are stored in `results/scaling_<job>_<mpi>.json`.
 ## Notes
 
 - Ensure that the PETSc installation prefix (`petsc-install-python`) matches the configure step.
-- `petsc4py` must be installed **via PETSc’s configure**, not via `pip install petsc4py`.
+- On Kuma, petsc4py is installed through PETSc's configure step. On Pitagora,
+  install the matching petsc4py version with pip against the loaded PETSc
+  module as described above.
 - This miniapp works both on CPU and GPU.
