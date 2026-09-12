@@ -110,17 +110,11 @@ def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=
 
 
 def solve_with_options(mat, rhs, initial_guess, ref_solution,
-                       ksp_type, pc_type, rtol=1e-13, use_initial_guess=True):
-    """Solve the system with given options and measure time, plus error vs reference solution."""
+                       ksp_type, pc_type, rtol=1e-13, use_initial_guess=True,
+                       repetitions=1):
+    """Solve repeatedly with one KSP, reusing its preconditioner after setup."""
 
-    # Create solution vector and set initial guess
     x = mat.createVecRight()
-    if use_initial_guess and initial_guess is not None:
-        initial_guess.copy(x)  # Copy provided initial guess into solution vector
-    else:
-        x.set(0.0)  # Zero initial guess
-
-    # Create KSP solver
     ksp = PETSc.KSP().create(PETSc.COMM_WORLD)
     ksp.setOperators(mat)
     ksp.setType(ksp_type)
@@ -133,51 +127,64 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
     # Initial guess
     ksp.setInitialGuessNonzero(use_initial_guess and initial_guess is not None)
 
+    # petsc4py does not expose KSPSetReusePreconditioner directly. This option
+    # provides the same behavior as SOLEDGE3x for subsequent KSPSolve calls.
+    PETSc.Options().setValue("ksp_reuse_preconditioner", 1)
+
     # Configuration from command line options (optional)
     ksp.setFromOptions()
 
-    # Measure solve time
-    PETSc.COMM_WORLD.barrier()
-    t_start = time.time()
-
+    samples = []
     try:
-        ksp.solve(rhs, x)
-        PETSc.COMM_WORLD.barrier()
-        t_end = time.time()
+        for repetition in range(repetitions):
+            PETSc.Sys.Print(f"  Repetition {repetition + 1}/{repetitions}")
 
-        solve_time = t_end - t_start
-        converged = ksp.getConvergedReason() > 0
-        iterations = ksp.getIterationNumber()
-        residual = ksp.getResidualNorm()
-        solution_norm = x.norm(PETSc.NormType.NORM_1)
+            if use_initial_guess and initial_guess is not None:
+                initial_guess.copy(x)
+            else:
+                x.set(0.0)
 
-        # Error vs reference solution (if provided)
-        error_l1 = None
-        if ref_solution is not None:
-            diff = x.copy()
-            diff.axpy(-1.0, ref_solution)  # diff = x - ref_solution
-            error_l1 = diff.norm(PETSc.NormType.NORM_1)
-            diff.destroy()
-    except Exception as e:
-        PETSc.Sys.Print(f"Error during solve: {e}")
-        solve_time = float('inf')
-        converged = False
-        iterations = -1
-        residual = float('inf')
-        solution_norm = float('inf')
-        error_l1 = float('inf')
+            PETSc.COMM_WORLD.barrier()
+            t_start = time.time()
 
-    ksp.destroy()
-    x.destroy()
+            try:
+                ksp.solve(rhs, x)
+                PETSc.COMM_WORLD.barrier()
+                solve_time = time.time() - t_start
 
-    return {
-        'time': solve_time,
-        'converged': converged,
-        'iterations': iterations,
-        'residual': residual,
-        'solution_norm': solution_norm,
-        'error_l1': error_l1,
-    }
+                converged = ksp.getConvergedReason() > 0
+                iterations = ksp.getIterationNumber()
+                residual = ksp.getResidualNorm()
+                solution_norm = x.norm(PETSc.NormType.NORM_1)
+
+                error_l1 = None
+                if ref_solution is not None:
+                    diff = x.copy()
+                    diff.axpy(-1.0, ref_solution)
+                    error_l1 = diff.norm(PETSc.NormType.NORM_1)
+                    diff.destroy()
+            except Exception as e:
+                PETSc.Sys.Print(f"Error during solve: {e}")
+                solve_time = float('inf')
+                converged = False
+                iterations = -1
+                residual = float('inf')
+                solution_norm = float('inf')
+                error_l1 = float('inf')
+
+            samples.append({
+                'time': solve_time,
+                'converged': converged,
+                'iterations': iterations,
+                'residual': residual,
+                'solution_norm': solution_norm,
+                'error_l1': error_l1,
+            })
+    finally:
+        ksp.destroy()
+        x.destroy()
+
+    return samples
 
 def test_positive_quadratic_forms(mat, number_of_tests=10, tolerance=0.0):
     """Look for vectors v for which v^H A v <= tolerance.
@@ -444,18 +451,23 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             else:
                 all_opts.setValue(opt, 1)
 
-        samples = []
-        for repetition in range(repetitions):
-            PETSc.Sys.Print(f"  Repetition {repetition + 1}/{repetitions}")
-            samples.append(solve_with_options(
-                mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess
-            ))
+        samples = solve_with_options(
+            mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess,
+            repetitions=repetitions,
+        )
 
-        median_time = statistics.median(sample["time"] for sample in samples)
-        result = min(samples, key=lambda sample: abs(sample["time"] - median_time))
+        reused_samples = samples[1:]
+        reported_samples = reused_samples or samples
+        median_time = statistics.median(sample["time"] for sample in reported_samples)
+        result = min(
+            reported_samples,
+            key=lambda sample: abs(sample["time"] - median_time),
+        )
         result = result.copy()
         result["time"] = median_time
         result["time_samples"] = [sample["time"] for sample in samples]
+        result["first_solve_time"] = samples[0]["time"]
+        result["reuse_time_samples"] = [sample["time"] for sample in reused_samples]
         result["converged"] = all(sample["converged"] for sample in samples)
         result["mpi_processes"] = size
 
@@ -469,8 +481,16 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         if result['error_l1'] is not None and result['error_l1'] != float('inf'):
             err_str = f", Error L1 vs ref: {result['error_l1']:.6e}"
 
+        if reused_samples:
+            PETSc.Sys.Print(
+                f"  First solve (PC setup included): {samples[0]['time']:.4f}s"
+            )
+            timing_label = "Median reused-PC TTS"
+        else:
+            timing_label = "TTS (PC setup included)"
+
         PETSc.Sys.Print(
-            f"  Median TTS: {result['time']:.4f}s, "
+            f"  {timing_label}: {result['time']:.4f}s, "
             f"Converged: {result['converged']}, "
             f"Iterations: {result['iterations']}, "
             f"Residual: {result['residual']:.2e}, "
@@ -749,7 +769,11 @@ def parse_arguments():
     parser.add_argument("--ref")
     parser.add_argument("--config")
     parser.add_argument("--gpu", action="store_true")
-    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument(
+        "--repetitions", type=int, default=1,
+        help=("Solves per configuration. The first builds the preconditioner; "
+              "later solves reuse it and determine the reported median."),
+    )
     parser.add_argument("--results-json")
     parser.add_argument("--test-case")
     parser.add_argument("--petsc-options", nargs="*", default=[],

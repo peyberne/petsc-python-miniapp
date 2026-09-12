@@ -192,6 +192,14 @@ of repetitions can be changed through exported environment variables:
 sbatch --export=ALL,MPI_COUNTS=1:2:4,REPETITIONS=3 submission_script.sh
 ```
 
+For each solver configuration, the first repetition creates the GAMG
+preconditioner and includes its setup cost. Later repetitions reuse the same
+KSP and preconditioner, matching SOLEDGE3x's steady-state solve behavior. The
+JSON output records the setup-inclusive time as `first_solve_time`, all samples
+as `time_samples`, and subsequent samples as `reuse_time_samples`. The reported
+`time` and scaling plots use the median of the reused-preconditioner samples
+when at least two repetitions are requested.
+
 For a multi-node run, request enough nodes/tasks and include larger MPI counts.
 Kuma has four H100 GPUs per node, for example:
 
