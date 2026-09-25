@@ -175,11 +175,6 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
     # Initial guess
     ksp.setInitialGuessNonzero(use_initial_guess and initial_guess is not None)
 
-    # petsc4py does not expose KSPSetReusePreconditioner directly. With this
-    # option KSPSolve never triggers a PCSetUp, so the reuse regime is a pure
-    # reused-PC solve. Explicit ksp.setUp() calls still rebuild the PC.
-    PETSc.Options().setValue("ksp_reuse_preconditioner", 1)
-
     # Configuration from command line options (optional)
     ksp.setFromOptions()
 
@@ -194,6 +189,9 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
 
             setup_time = 0.0
             if regime == "setup":
+                # The PC reuse flag must be OFF so the explicit setUp() runs
+                # the full (structural + numerical) setup.
+                pc.setReusePreconditioner(False)
                 PETSc.COMM_WORLD.barrier()
                 t_setup = time.time()
                 ksp.setUp()
@@ -204,9 +202,11 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
                     PETSc.Sys.Print("  KSP/PC hierarchy after full setup:")
                     ksp.view()
             elif regime == "numeric_setup":
-                # Same matrix object => SAME_NONZERO_PATTERN => GAMG reuses
-                # the aggregates and the prolongator and only recomputes the
+                # The PC reuse flag must be OFF so PCSetUp proceeds. Same
+                # matrix object => SAME_NONZERO_PATTERN => GAMG reuses the
+                # aggregates and the prolongator and only recomputes the
                 # Galerkin products, like SOLEDGE3x reUsePCMaxIt = 0.
+                pc.setReusePreconditioner(False)
                 ksp.setOperators(mat)
                 PETSc.COMM_WORLD.barrier()
                 t_setup = time.time()
@@ -214,6 +214,10 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
                 PETSc.COMM_WORLD.barrier()
                 setup_time = time.time() - t_setup
                 PETSc.Sys.Print(f"  Numeric-only PC setup: {setup_time:.4f}s")
+            # With the PC reuse flag ON, KSPSolve never triggers a PCSetUp:
+            # the solve uses the PC as left by the last explicit setUp(), and
+            # the reuse regime is a pure reused-PC solve.
+            pc.setReusePreconditioner(True)
 
             if use_initial_guess and initial_guess is not None:
                 initial_guess.copy(x)
