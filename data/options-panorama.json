@@ -1,0 +1,10 @@
+{
+  "ksp_rtol": [1e-9],
+  "pc_type": ["gamg", "sor", "mg", "pbjacobi", "jacobi"],
+  "ksp_type": ["gmres", "fgmres", "bcgs", "bcgsl", "pipebcgs"],
+  "use_initial_guess": [true],
+  "pc_options": {
+    "hypre": ["pc_hypre_type=boomeramg"],
+    "sor": ["pc_sor_local_symmetric"]
+  }
+}

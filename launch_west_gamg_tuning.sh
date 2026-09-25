@@ -5,7 +5,7 @@ BASE=/pitagora/home/userexternal/mpeybern/petsc-python-miniapp
 SBATCH="$BASE/submission_west_gamg_tuning.sh"
 
 first=$(sbatch --job-name=west-panorama \
-    --export=ALL,CONFIG=options.json,LABEL=panorama "$SBATCH" | awk '{print $4}')
+    --export=ALL,CONFIG=options-panorama.json,LABEL=panorama "$SBATCH" | awk '{print $4}')
 second=$(sbatch --job-name=gamg-safe --dependency=afterok:$first \
     --export=ALL,CONFIG=gamg-west-safe.json,LABEL=safe "$SBATCH" | awk '{print $4}')
 third=$(sbatch --job-name=gamg-asm --dependency=afterok:$second \
