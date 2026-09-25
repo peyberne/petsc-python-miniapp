@@ -1,0 +1,16 @@
+{
+  "configurations": [
+    {
+      "name": "asm_use_agg + agg_nsmooths=2",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": [
+        "pc_gamg_type=agg",
+        "pc_gamg_asm_use_agg=true",
+        "pc_gamg_agg_nsmooths=2"
+      ]
+    }
+  ]
+}

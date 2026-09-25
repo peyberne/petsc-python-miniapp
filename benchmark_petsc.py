@@ -37,6 +37,20 @@ def load_options_from_json(path):
     with open(path, "r") as f:
         opts = json.load(f)
 
+    if "configurations" in opts:
+        required_keys = ["name", "ksp_rtol", "pc_type", "ksp_type", "use_initial_guess"]
+        configurations = opts["configurations"]
+        if not isinstance(configurations, list) or not configurations:
+            raise ValueError(f"'configurations' must be a non-empty list: {path}")
+        for index, configuration in enumerate(configurations):
+            for key in required_keys:
+                if key not in configuration:
+                    raise ValueError(
+                        f"Missing required key '{key}' in configuration {index}: {path}"
+                    )
+            configuration.setdefault("petsc_options", [])
+        return configurations
+
     required_keys = ["ksp_rtol", "pc_type", "ksp_type", "use_initial_guess"]
     for k in required_keys:
         if k not in opts:
@@ -111,7 +125,7 @@ def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=
 
 def solve_with_options(mat, rhs, initial_guess, ref_solution,
                        ksp_type, pc_type, rtol=1e-13, use_initial_guess=True,
-                       repetitions=1):
+                       repetitions=1, separate_setup=False, view_ksp=False):
     """Solve repeatedly with one KSP, reusing its preconditioner after setup."""
 
     x = mat.createVecRight()
@@ -135,7 +149,23 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
     ksp.setFromOptions()
 
     samples = []
+    setup_time = None
     try:
+        if separate_setup:
+            PETSc.COMM_WORLD.barrier()
+            setup_start = time.time()
+            try:
+                ksp.setUp()
+                PETSc.COMM_WORLD.barrier()
+                setup_time = time.time() - setup_start
+                PETSc.Sys.Print(f"  Explicit KSP/PC setup: {setup_time:.4f}s")
+                if view_ksp:
+                    ksp.view()
+            except Exception as e:
+                PETSc.Sys.Print(f"Error during setup: {e}")
+                setup_time = float('inf')
+                return [], setup_time
+
         for repetition in range(repetitions):
             PETSc.Sys.Print(f"  Repetition {repetition + 1}/{repetitions}")
 
@@ -184,7 +214,7 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
         ksp.destroy()
         x.destroy()
 
-    return samples
+    return samples, setup_time
 
 def test_positive_quadratic_forms(mat, number_of_tests=10, tolerance=0.0):
     """Look for vectors v for which v^H A v <= tolerance.
@@ -338,7 +368,8 @@ def inspect_matrix_properties(mat, symmetry_tol=1e-12):
 
 def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
                    use_gpu=False, config_file=None, repetitions=1,
-                   petsc_options=None):
+                   petsc_options=None, separate_setup=False, view_ksp=False,
+                   results_json=None, test_case=None):
     """Run all benchmarks."""
 
     # Load data
@@ -422,15 +453,17 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             ksp_type = combo["ksp_type"]
             use_guess = combo["use_initial_guess"]
             config_petsc_opts = combo.get("petsc_options", [])
+            config_name = combo.get("name")
         else:
             rtol = combo[0]
             pc_type = combo[1]
             ksp_type = combo[2]
             use_guess = combo[3]
             config_petsc_opts = []
+            config_name = None
 
         guess_label = "guess" if use_guess else "zero"
-        label = f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
+        label = config_name or f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
         PETSc.Sys.Print(f"[{i+1}/{len(combinations)}] Test: {label}")
 
         # Apply per-config PETSc options (clear previous, then set)
@@ -451,12 +484,42 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             else:
                 all_opts.setValue(opt, 1)
 
-        samples = solve_with_options(
+        samples, setup_time = solve_with_options(
             mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess,
             repetitions=repetitions,
+            separate_setup=separate_setup,
+            view_ksp=view_ksp,
         )
 
-        reused_samples = samples[1:]
+        if not samples:
+            result = {
+                "time": float('inf'),
+                "time_samples": [],
+                "solve_time_samples": [],
+                "first_solve_time": float('inf'),
+                "reuse_time_samples": [],
+                "setup_time": setup_time,
+                "total_time": float('inf'),
+                "converged": False,
+                "iterations": -1,
+                "residual": float('inf'),
+                "solution_norm": float('inf'),
+                "error_l1": float('inf'),
+                "mpi_processes": size,
+                "ksp_type": ksp_type,
+                "pc_type": pc_type,
+                "ksp_rtol": rtol,
+                "use_initial_guess": use_guess,
+                "configuration_name": config_name,
+                "petsc_options": config_petsc_opts,
+                "label": label,
+            }
+            results.append(result)
+            if results_json and PETSc.COMM_WORLD.getRank() == 0:
+                save_results(results, results_json, test_case=test_case)
+            continue
+
+        reused_samples = samples if separate_setup else samples[1:]
         reported_samples = reused_samples or samples
         median_time = statistics.median(sample["time"] for sample in reported_samples)
         result = min(
@@ -465,9 +528,20 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         )
         result = result.copy()
         result["time"] = median_time
-        result["time_samples"] = [sample["time"] for sample in samples]
-        result["first_solve_time"] = samples[0]["time"]
+        result["solve_time_samples"] = [sample["time"] for sample in samples]
+        if separate_setup:
+            result["first_solve_time"] = setup_time + samples[0]["time"]
+            result["time_samples"] = [result["first_solve_time"]] + [
+                sample["time"] for sample in samples[1:]
+            ]
+        else:
+            result["time_samples"] = [sample["time"] for sample in samples]
+            result["first_solve_time"] = samples[0]["time"]
         result["reuse_time_samples"] = [sample["time"] for sample in reused_samples]
+        result["setup_time"] = setup_time
+        result["total_time"] = (
+            setup_time + median_time if setup_time is not None else result["first_solve_time"]
+        )
         result["converged"] = all(sample["converged"] for sample in samples)
         result["mpi_processes"] = size
 
@@ -475,13 +549,18 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         result["pc_type"] = pc_type
         result["ksp_rtol"] = rtol
         result["use_initial_guess"] = use_guess
+        result["configuration_name"] = config_name
+        result["petsc_options"] = config_petsc_opts
         result["label"] = label
 
         err_str = ""
         if result['error_l1'] is not None and result['error_l1'] != float('inf'):
             err_str = f", Error L1 vs ref: {result['error_l1']:.6e}"
 
-        if reused_samples:
+        if separate_setup:
+            PETSc.Sys.Print(f"  GAMG setup: {setup_time:.4f}s")
+            timing_label = "Median solve TTS (PC already set up)"
+        elif reused_samples:
             PETSc.Sys.Print(
                 f"  First solve (PC setup included): {samples[0]['time']:.4f}s"
             )
@@ -499,6 +578,8 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         )
 
         results.append(result)
+        if results_json and PETSc.COMM_WORLD.getRank() == 0:
+            save_results(results, results_json, test_case=test_case)
 
     # Print rankings for this MPI count
     by_tts = sorted(enumerate(results), key=lambda r: r[1]['time'])
@@ -776,6 +857,18 @@ def parse_arguments():
     )
     parser.add_argument("--results-json")
     parser.add_argument("--test-case")
+    parser.add_argument(
+        "--separate-setup", action="store_true",
+        help="Time KSPSetUp separately before measuring repeated solves.",
+    )
+    parser.add_argument(
+        "--view-ksp", action="store_true",
+        help="View the configured KSP hierarchy after explicit setup.",
+    )
+    parser.add_argument(
+        "--log-view", action="store_true",
+        help="Enable PETSc event logging and print the log summary after the benchmark.",
+    )
     parser.add_argument("--petsc-options", nargs="*", default=[],
                         help="Extra PETSc options, e.g. --petsc-options pc_sor_local_symmetric")
     parser.add_argument("--plot-results", nargs="+")
@@ -797,13 +890,21 @@ if __name__ == "__main__":
     if args.plot_results:
         plot_scaling_results(args.plot_results, args.output)
     else:
+        if args.log_view:
+            PETSc.Log.begin()
         results = run_benchmarks(
             args.mat, args.rhs, args.guess, args.ref,
             use_gpu=args.gpu,
             config_file=args.config,
             repetitions=args.repetitions,
             petsc_options=args.petsc_options,
+            separate_setup=args.separate_setup,
+            view_ksp=args.view_ksp,
+            results_json=args.results_json,
+            test_case=args.test_case,
         )
+        if args.log_view:
+            PETSc.Log.view()
         if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
             save_results(results, args.results_json, test_case=args.test_case)
         PETSc.Sys.Print("\nBenchmark completed!")

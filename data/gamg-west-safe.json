@@ -1,0 +1,52 @@
+{
+  "configurations": [
+    {
+      "name": "baseline",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg"]
+    },
+    {
+      "name": "threshold=0.0",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg", "pc_gamg_threshold=0.0"]
+    },
+    {
+      "name": "threshold=0.05",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg", "pc_gamg_threshold=0.05"]
+    },
+    {
+      "name": "threshold=0.1",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg", "pc_gamg_threshold=0.1"]
+    },
+    {
+      "name": "agg_nsmooths=2",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg", "pc_gamg_agg_nsmooths=2"]
+    },
+    {
+      "name": "aggressive_coarsening=0",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": ["pc_gamg_type=agg", "pc_gamg_aggressive_coarsening=0"]
+    }
+  ]
+}
