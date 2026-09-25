@@ -1,0 +1,16 @@
+{
+  "configurations": [
+    {
+      "name": "aggressive_square_graph",
+      "ksp_rtol": 1e-9,
+      "pc_type": "gamg",
+      "ksp_type": "bcgs",
+      "use_initial_guess": true,
+      "petsc_options": [
+        "pc_gamg_type=agg",
+        "pc_gamg_aggressive_coarsening=1",
+        "pc_gamg_aggressive_square_graph=true"
+      ]
+    }
+  ]
+}

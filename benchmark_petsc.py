@@ -2,6 +2,13 @@
 """
 Benchmark PETSc solver with different options.
 Optionally compares each solution to a reference solution (sol.dat).
+
+Each configuration is measured in three regimes (one per repetition):
+  1. explicit full PC setup (structural + numerical) + solve,
+  2. numeric-only PC setup (unchanged sparsity pattern, mimics
+     SOLEDGE3x reUsePCMaxIt = 0) + solve,
+  3. no setup, the preconditioner is reused (mimics
+     SOLEDGE3x reUsePCMaxIt >= 1) + solve.
 """
 import argparse
 import sys
@@ -19,7 +26,24 @@ if __name__ != "__main__" or "--plot-results" not in sys.argv:
 def load_options_from_json(path):
     """Load solver options from a JSON file and return a list of configuration dicts.
 
-    Expected JSON format, e.g.:
+    Two formats are supported.
+
+    Named configurations (allows several variants sharing the same pc_type):
+
+    {
+      "configurations": [
+        {
+          "name": "baseline",
+          "ksp_rtol": 1e-9,
+          "pc_type": "gamg",
+          "ksp_type": "bcgs",
+          "use_initial_guess": true,
+          "petsc_options": ["pc_gamg_threshold=0.0"]
+        }
+      ]
+    }
+
+    Cartesian product format, e.g.:
 
     {
       "ksp_rtol": [1e-13],
@@ -36,6 +60,20 @@ def load_options_from_json(path):
     """
     with open(path, "r") as f:
         opts = json.load(f)
+
+    if "configurations" in opts:
+        config_list = []
+        for entry in opts["configurations"]:
+            config = dict(entry)
+            for key in ("ksp_rtol", "pc_type", "ksp_type", "use_initial_guess"):
+                if key not in config:
+                    raise ValueError(
+                        f"Named configuration is missing key '{key}' in {path}"
+                    )
+            config.setdefault("name", None)
+            config.setdefault("petsc_options", [])
+            config_list.append(config)
+        return config_list
 
     required_keys = ["ksp_rtol", "pc_type", "ksp_type", "use_initial_guess"]
     for k in required_keys:
@@ -111,8 +149,18 @@ def load_petsc_data(mat_file, rhs_file, guess_file=None, ref_file=None, use_gpu=
 
 def solve_with_options(mat, rhs, initial_guess, ref_solution,
                        ksp_type, pc_type, rtol=1e-13, use_initial_guess=True,
-                       repetitions=1):
-    """Solve repeatedly with one KSP, reusing its preconditioner after setup."""
+                       repetitions=1, view_ksp=False):
+    """Solve repeatedly with one KSP, one regime per repetition.
+
+    Repetition 1: explicit full ksp.setUp() (structural + numerical setup)
+                  timed separately, then a solve.
+    Repetition 2: ksp.setOperators() re-applied with an unchanged sparsity
+                  pattern and an explicit ksp.setUp() timed as a numeric-only
+                  setup (mimics SOLEDGE3x reUsePCMaxIt = 0), then a solve.
+    Repetition 3: no setup, the preconditioner from repetition 2 is reused
+                  (mimics SOLEDGE3x reUsePCMaxIt >= 1), then a solve.
+    With more repetitions the regimes cycle.
+    """
 
     x = mat.createVecRight()
     ksp = PETSc.KSP().create(PETSc.COMM_WORLD)
@@ -127,17 +175,45 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
     # Initial guess
     ksp.setInitialGuessNonzero(use_initial_guess and initial_guess is not None)
 
-    # petsc4py does not expose KSPSetReusePreconditioner directly. This option
-    # provides the same behavior as SOLEDGE3x for subsequent KSPSolve calls.
+    # petsc4py does not expose KSPSetReusePreconditioner directly. With this
+    # option KSPSolve never triggers a PCSetUp, so the reuse regime is a pure
+    # reused-PC solve. Explicit ksp.setUp() calls still rebuild the PC.
     PETSc.Options().setValue("ksp_reuse_preconditioner", 1)
 
     # Configuration from command line options (optional)
     ksp.setFromOptions()
 
+    regime_names = ["setup", "numeric_setup", "reuse"]
     samples = []
     try:
         for repetition in range(repetitions):
-            PETSc.Sys.Print(f"  Repetition {repetition + 1}/{repetitions}")
+            regime = regime_names[repetition % 3]
+            PETSc.Sys.Print(
+                f"  Repetition {repetition + 1}/{repetitions} (regime: {regime})"
+            )
+
+            setup_time = 0.0
+            if regime == "setup":
+                PETSc.COMM_WORLD.barrier()
+                t_setup = time.time()
+                ksp.setUp()
+                PETSc.COMM_WORLD.barrier()
+                setup_time = time.time() - t_setup
+                PETSc.Sys.Print(f"  Full PC setup: {setup_time:.4f}s")
+                if view_ksp and PETSc.COMM_WORLD.getRank() == 0:
+                    PETSc.Sys.Print("  KSP/PC hierarchy after full setup:")
+                    ksp.view()
+            elif regime == "numeric_setup":
+                # Same matrix object => SAME_NONZERO_PATTERN => GAMG reuses
+                # the aggregates and the prolongator and only recomputes the
+                # Galerkin products, like SOLEDGE3x reUsePCMaxIt = 0.
+                ksp.setOperators(mat)
+                PETSc.COMM_WORLD.barrier()
+                t_setup = time.time()
+                ksp.setUp()
+                PETSc.COMM_WORLD.barrier()
+                setup_time = time.time() - t_setup
+                PETSc.Sys.Print(f"  Numeric-only PC setup: {setup_time:.4f}s")
 
             if use_initial_guess and initial_guess is not None:
                 initial_guess.copy(x)
@@ -179,6 +255,8 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
                 'residual': residual,
                 'solution_norm': solution_norm,
                 'error_l1': error_l1,
+                'regime': regime,
+                'setup_time': setup_time,
             })
     finally:
         ksp.destroy()
@@ -338,7 +416,8 @@ def inspect_matrix_properties(mat, symmetry_tol=1e-12):
 
 def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
                    use_gpu=False, config_file=None, repetitions=1,
-                   petsc_options=None):
+                   petsc_options=None, results_json=None, test_case=None,
+                   view_ksp=False):
     """Run all benchmarks."""
 
     # Load data
@@ -416,6 +495,7 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
     PETSc.Sys.Print(f"\nTesting {len(combinations)} configurations...\n")
 
     for i, combo in enumerate(combinations):
+        config_name = combo.get("name")
         if use_config_file:
             rtol = combo["ksp_rtol"]
             pc_type = combo["pc_type"]
@@ -430,7 +510,8 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             config_petsc_opts = []
 
         guess_label = "guess" if use_guess else "zero"
-        label = f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
+        base_label = f"{ksp_type}+{pc_type} | rtol={rtol:.0e} | {guess_label}"
+        label = f"{config_name} ({base_label})" if config_name else base_label
         PETSc.Sys.Print(f"[{i+1}/{len(combinations)}] Test: {label}")
 
         # Apply per-config PETSc options (clear previous, then set)
@@ -453,7 +534,7 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
 
         samples = solve_with_options(
             mat, rhs, guess, ref_sol, ksp_type, pc_type, rtol, use_guess,
-            repetitions=repetitions,
+            repetitions=repetitions, view_ksp=view_ksp,
         )
 
         reused_samples = samples[1:]
@@ -468,6 +549,13 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         result["time_samples"] = [sample["time"] for sample in samples]
         result["first_solve_time"] = samples[0]["time"]
         result["reuse_time_samples"] = [sample["time"] for sample in reused_samples]
+        # Three-regime protocol fields (one regime per repetition)
+        result["setup_time"] = samples[0].get("setup_time")
+        result["numeric_setup_time"] = (
+            samples[1].get("setup_time") if len(samples) > 1 else None
+        )
+        result["solve_time_samples"] = [sample["time"] for sample in samples]
+        result["regimes"] = [sample["regime"] for sample in samples]
         result["converged"] = all(sample["converged"] for sample in samples)
         result["mpi_processes"] = size
 
@@ -475,6 +563,7 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         result["pc_type"] = pc_type
         result["ksp_rtol"] = rtol
         result["use_initial_guess"] = use_guess
+        result["configuration_name"] = config_name
         result["label"] = label
 
         err_str = ""
@@ -498,7 +587,20 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
             f"{err_str}\n"
         )
 
+        if len(samples) >= 3:
+            PETSc.Sys.Print(
+                f"  Regime breakdown:"
+                f" [full setup + solve] {samples[0]['setup_time'] + samples[0]['time']:.4f}s,"
+                f" [numeric setup + solve] {samples[1]['setup_time'] + samples[1]['time']:.4f}s,"
+                f" [reuse] {samples[2]['time']:.4f}s"
+            )
+
         results.append(result)
+
+        # Incremental OOM-safe save: earlier configurations survive a crash
+        # (e.g. OOM) during a later one.
+        if results_json and PETSc.COMM_WORLD.getRank() == 0:
+            save_results(results, results_json, test_case=test_case)
 
     # Print rankings for this MPI count
     by_tts = sorted(enumerate(results), key=lambda r: r[1]['time'])
@@ -521,6 +623,23 @@ def run_benchmarks(mat_file, rhs_file, guess_file=None, ref_file=None,
         PETSc.Sys.Print(
             f"  {rank}. {r['label']} | {r['iterations']} it | "
             f"{r['time']:.4f}s | {status}"
+        )
+
+    # Production-relevant ranking: per-step cost with reUsePCMaxIt = 0
+    # (numeric-only PC setup + solve).
+    def per_step_cost(r):
+        numeric = r.get("numeric_setup_time")
+        if numeric is not None and len(r.get("solve_time_samples", [])) > 1:
+            return numeric + r["solve_time_samples"][1]
+        return r['time']
+
+    by_step = sorted(enumerate(results), key=lambda r: per_step_cost(r[1]))
+    PETSc.Sys.Print("\n=== Ranking by per-step cost, numeric setup + solve (reUsePCMaxIt=0) ===")
+    for rank, (idx, r) in enumerate(by_step, 1):
+        status = "ok" if r['converged'] else "FAIL"
+        PETSc.Sys.Print(
+            f"  {rank}. {r['label']} | {per_step_cost(r):.4f}s | "
+            f"{r['iterations']} it | {status}"
         )
 
     PETSc.Sys.Print("")
@@ -650,6 +769,7 @@ def plot_scaling_results(result_files, output_file='results/benchmark_results.pn
 
     # Generate ranking figures
     plot_scaling_rankings(datasets, output_path.parent, test_case=test_case)
+    plot_regime_rankings(datasets, output_path.parent, test_case=test_case)
 
 
 def plot_scaling_rankings(datasets, output_dir, test_case=None):
@@ -761,6 +881,74 @@ def plot_scaling_rankings(datasets, output_dir, test_case=None):
     print(f"Iteration ranking saved: {iter_path}")
 
 
+def plot_regime_rankings(datasets, output_dir, test_case=None):
+    """Grouped ranking figure with one bar per regime for each configuration.
+
+    Regimes: full setup + solve, numeric setup + solve, reuse (no setup).
+    """
+    regime_results = [
+        r for ds in datasets for r in ds["results"]
+        if r.get("regimes") and len(r["regimes"]) >= 3
+    ]
+    if not regime_results:
+        return
+
+    regime_results.sort(key=lambda r: r["solve_time_samples"][2])
+
+    regime_labels = [
+        "full setup + solve",
+        "numeric setup + solve",
+        "reuse (no setup)",
+    ]
+    regime_colors = ["#4c72b0", "#55a868", "#c44e52"]
+
+    bar_h = 0.26
+    fig, ax = plt.subplots(
+        figsize=(11, max(6, len(regime_results) * 1.0))
+    )
+
+    for gi, r in enumerate(regime_results):
+        setup_t = r.get("setup_time")
+        numeric_t = r.get("numeric_setup_time")
+        solves = r["solve_time_samples"]
+        values = [
+            (setup_t + solves[0]) if setup_t is not None else solves[0],
+            (numeric_t + solves[1]) if numeric_t is not None else None,
+            solves[2],
+        ]
+        for ri, value in enumerate(values):
+            failed = value is None or value == float('inf') or value != value
+            y = gi + (1 - ri) * bar_h
+            width = 0.0 if failed else value
+            ax.barh(
+                y, width, height=bar_h,
+                color=regime_colors[ri],
+                edgecolor="red" if failed else "black",
+                linewidth=0.8 if failed else 0.3,
+                alpha=0.85,
+                label=regime_labels[ri] if gi == 0 else None,
+            )
+            text = "FAIL" if failed else f"{value:.2f}s"
+            ax.text(width, y, f" {text}", va="center", fontsize=7)
+
+    ax.set_yticks(range(len(regime_results)))
+    ax.set_yticklabels([r["label"] for r in regime_results], fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("Time (s)", fontsize=10)
+    ax.grid(axis="x", alpha=0.3)
+
+    suptitle = "Per-regime cost ranking (one regime per repetition)"
+    if test_case:
+        suptitle += f"  — {test_case}"
+    fig.suptitle(suptitle, fontsize=14, fontweight="bold", y=1.01)
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+    regime_path = Path(output_dir) / "ranking_regimes.png"
+    fig.savefig(regime_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Regime ranking saved: {regime_path}")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mat")
@@ -771,11 +959,16 @@ def parse_arguments():
     parser.add_argument("--gpu", action="store_true")
     parser.add_argument(
         "--repetitions", type=int, default=1,
-        help=("Solves per configuration. The first builds the preconditioner; "
-              "later solves reuse it and determine the reported median."),
+        help=("Solves per configuration, one regime per repetition: "
+              "1 = full setup + solve, 2 = numeric-only setup + solve, "
+              "3 = reused-PC solve (regimes cycle with more repetitions)."),
     )
     parser.add_argument("--results-json")
     parser.add_argument("--test-case")
+    parser.add_argument("--view-ksp", action="store_true",
+                        help="Print the KSP/PC hierarchy after each full setup")
+    parser.add_argument("--log-view", action="store_true",
+                        help="Enable PETSc logging and print a summary log at the end")
     parser.add_argument("--petsc-options", nargs="*", default=[],
                         help="Extra PETSc options, e.g. --petsc-options pc_sor_local_symmetric")
     parser.add_argument("--plot-results", nargs="+")
@@ -794,6 +987,9 @@ def parse_arguments():
 if __name__ == "__main__":
     args = parse_arguments()
 
+    if args.log_view:
+        PETSc.Log.begin()
+
     if args.plot_results:
         plot_scaling_results(args.plot_results, args.output)
     else:
@@ -803,7 +999,13 @@ if __name__ == "__main__":
             config_file=args.config,
             repetitions=args.repetitions,
             petsc_options=args.petsc_options,
+            results_json=args.results_json,
+            test_case=args.test_case,
+            view_ksp=args.view_ksp,
         )
         if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
             save_results(results, args.results_json, test_case=args.test_case)
-        PETSc.Sys.Print("\nBenchmark completed!")
+        if args.log_view and PETSc.COMM_WORLD.getRank() == 0:
+            PETSc.Sys.Print("\n=== PETSc log summary ===")
+            PETSc.Log.view()
+    PETSc.Sys.Print("\nBenchmark completed!")
