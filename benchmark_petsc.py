@@ -198,7 +198,7 @@ def solve_with_options(mat, rhs, initial_guess, ref_solution,
                 PETSc.COMM_WORLD.barrier()
                 setup_time = time.time() - t_setup
                 PETSc.Sys.Print(f"  Full PC setup: {setup_time:.4f}s")
-                if view_ksp and PETSc.COMM_WORLD.getRank() == 0:
+                if view_ksp:
                     PETSc.Sys.Print("  KSP/PC hierarchy after full setup:")
                     ksp.view()
             elif regime == "numeric_setup":
@@ -1013,7 +1013,10 @@ if __name__ == "__main__":
         )
         if PETSc.COMM_WORLD.getRank() == 0 and args.results_json:
             save_results(results, args.results_json, test_case=args.test_case)
-        if args.log_view and PETSc.COMM_WORLD.getRank() == 0:
+        if args.log_view:
             PETSc.Sys.Print("\n=== PETSc log summary ===")
             PETSc.Log.view()
-    PETSc.Sys.Print("\nBenchmark completed!")
+    if args.plot_results:
+        print("\nPlotting completed!")
+    else:
+        PETSc.Sys.Print("\nBenchmark completed!")
