@@ -1,0 +1,28 @@
+name: Mirror to Eurofusion GitLab
+
+on:
+  push:
+  delete:
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone GitHub repository as mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --mirror \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            repo.git
+
+      - name: Push mirror to Eurofusion GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.EUROFUSION_GITLAB_TOKEN }}
+        run: |
+          cd repo.git
+
+          git push --mirror \
+            "https://oauth2:${GITLAB_TOKEN}@gitlab.eufus.psnc.pl/peyberm/petsc-python-miniapp.git"
